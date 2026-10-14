@@ -1,0 +1,15 @@
+{
+	email {$CLEARPORT_TLS_EMAIL}
+}
+
+{$CLEARPORT_DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 11MB
+	}
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+	reverse_proxy clearport:3001
+}

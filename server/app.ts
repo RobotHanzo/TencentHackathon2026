@@ -1,6 +1,6 @@
 import express, { type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import type {
@@ -11,10 +11,14 @@ import type {
   Category,
   ChatMessage,
   Knowledge,
+  IntegrationState,
   User,
 } from '../shared/types.ts';
 import { Store, type Workspace } from './store.ts';
 import { answerQuestion, liveConfigured, reviewCase, type AIConfig } from './advisor.ts';
+import { KnowledgeSync, type KnowledgeClient } from './knowledge-sync.ts';
+import { TencentKnowledgeClient } from './tencent-knowledge.ts';
+import { OriginalStorage } from './object-storage.ts';
 
 const categories: Category[] = ['Electronics', 'Food & produce', 'Automotive', 'General cargo'];
 class ApiError extends Error {
@@ -80,6 +84,9 @@ export interface AppOptions {
   now?: () => Date;
   ai?: AIConfig;
   staticDir?: string;
+  cookieSecure?: boolean;
+  knowledge?: { client: KnowledgeClient; target: string; autoPublish?: boolean; start?: boolean };
+  originals?: Pick<OriginalStorage, 'put'>;
 }
 
 async function extractFile(file: Express.Multer.File): Promise<string> {
@@ -139,10 +146,65 @@ export function createApp(options: AppOptions = {}) {
   if (!demoMode && (!accessPassword || accessPassword.length < 12))
     throw new Error('Non-demo mode requires an APP_ACCESS_PASSWORD of at least 12 characters.');
   const ai = options.ai ?? {
+    provider: (process.env.AI_PROVIDER?.trim() || undefined) as AIConfig['provider'],
     baseUrl: process.env.AI_BASE_URL,
     apiKey: process.env.AI_API_KEY,
     model: process.env.AI_MODEL,
+    adpAppKey: process.env.ADP_APP_KEY,
+    adpEndpoint: process.env.ADP_ENDPOINT,
   };
+  if (ai.provider !== undefined && !['local', 'openai', 'adp'].includes(ai.provider))
+    throw new Error('AI_PROVIDER must be local, openai or adp.');
+  if (ai.provider === 'adp' && !ai.adpAppKey?.trim())
+    throw new Error('AI_PROVIDER=adp requires ADP_APP_KEY.');
+  if (ai.provider === 'openai' && !(ai.baseUrl && ai.apiKey && ai.model))
+    throw new Error('AI_PROVIDER=openai requires AI_BASE_URL, AI_API_KEY and AI_MODEL.');
+  const provider = ai.provider ?? (ai.adpAppKey ? 'adp' : liveConfigured(ai) ? 'openai' : 'local');
+  const connection: IntegrationState = {
+    provider,
+    connection: provider === 'local' ? 'local' : 'configured',
+  };
+  const noteConnection = (mode: 'local' | 'live') => {
+    if (provider === 'local') return;
+    connection.connection = mode === 'live' ? 'verified' : 'error';
+    connection.checkedAt = now().toISOString();
+  };
+  const cookieSecure = options.cookieSecure ?? process.env.APP_COOKIE_SECURE === 'true';
+  let knowledgeConfig = options.knowledge;
+  const originals =
+    options.originals ??
+    (process.env.COS_BUCKET
+      ? new OriginalStorage({
+          bucket: process.env.COS_BUCKET,
+          region: process.env.COS_REGION,
+          secretId: process.env.TENCENT_SECRET_ID ?? '',
+          secretKey: process.env.TENCENT_SECRET_KEY ?? '',
+          sessionToken: process.env.TENCENT_TOKEN,
+        })
+      : undefined);
+  if (!knowledgeConfig && process.env.ADP_KNOWLEDGE_SYNC === 'true') {
+    const secretId = process.env.TENCENT_SECRET_ID;
+    const secretKey = process.env.TENCENT_SECRET_KEY;
+    const appBizId = process.env.ADP_APP_BIZ_ID;
+    const region = process.env.TENCENT_REGION || 'ap-jakarta';
+    if (!secretId || !secretKey || !appBizId)
+      throw new Error(
+        'ADP knowledge sync requires TENCENT_SECRET_ID, TENCENT_SECRET_KEY and ADP_APP_BIZ_ID.',
+      );
+    knowledgeConfig = {
+      client: new TencentKnowledgeClient({
+        secretId,
+        secretKey,
+        appBizId,
+        region,
+        sessionToken: process.env.TENCENT_TOKEN,
+      }),
+      target: createHash('sha256')
+        .update(JSON.stringify([region, appBizId]))
+        .digest('hex'),
+      autoPublish: process.env.ADP_AUTO_PUBLISH === 'true',
+    };
+  }
   const store = new Store(
     options.dbPath ?? process.env.DATA_PATH ?? resolve('data/clearport.db'),
     now(),
@@ -152,8 +214,22 @@ export function createApp(options: AppOptions = {}) {
     store.close();
     throw new Error('APP_USER_ID does not identify a workspace user.');
   }
+  const knowledgeSync = knowledgeConfig
+    ? new KnowledgeSync(
+        store,
+        knowledgeConfig.client,
+        knowledgeConfig.target,
+        knowledgeConfig.autoPublish,
+        now,
+      )
+    : undefined;
+  if (knowledgeSync) {
+    store.mutate((workspace) => knowledgeSync.enqueue(workspace));
+    if (knowledgeConfig?.start !== false) knowledgeSync.start();
+  }
   const app = express();
   const sessions = new Map<string, { userId: string; expires: number }>();
+  const activeConversations = new Set<string>();
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 8, fieldSize: 300_000 },
@@ -217,7 +293,7 @@ export function createApp(options: AppOptions = {}) {
       res.cookie('clearport_session', token, {
         httpOnly: true,
         sameSite: 'strict',
-        secure: req.secure,
+        secure: cookieSecure || req.secure,
         maxAge: 12 * 60 * 60 * 1000,
         path: '/',
       });
@@ -264,12 +340,24 @@ export function createApp(options: AppOptions = {}) {
   };
 
   app.get('/api/state', (_req, res) => {
-    const { chatOwners = {}, ...workspace } = store.read();
+    const {
+      chatOwners = {},
+      agentConversations: _conversations,
+      knowledgeSync: syncJobs = {},
+      ...workspace
+    } = store.read();
     const state: AppState = {
       ...workspace,
       chats: workspace.chats.filter((message) => chatOwners[message.id] === user(res).id),
+      knowledge: workspace.knowledge.map((item) => ({
+        ...item,
+        ...(knowledgeSync && syncJobs[item.id]?.target === knowledgeSync.target
+          ? { adpStatus: syncJobs[item.id].status }
+          : {}),
+      })),
       user: user(res),
       aiMode: liveConfigured(ai) ? 'live' : 'local',
+      integrations: { ...connection, knowledge: knowledgeSync?.summary() },
     };
     res.json(state);
   });
@@ -335,7 +423,12 @@ export function createApp(options: AppOptions = {}) {
     const snapshot = store.read();
     const before = record(snapshot, req.params.id);
     editable(before, res);
-    const review = await reviewCase(snapshot, before, now(), ai);
+    const review = await reviewCase(snapshot, before, now(), ai, {
+      visitorId: createHash('sha256').update(user(res).id).digest('hex'),
+      conversationId: randomUUID(),
+      documentMap: knowledgeSync?.documentMap(),
+    });
+    noteConnection(review.mode);
     res.json(
       store.mutate((workspace) => {
         const item = record(workspace, req.params.id);
@@ -420,6 +513,7 @@ export function createApp(options: AppOptions = {}) {
           caseId: item.id,
         };
         workspace.knowledge.unshift(knowledge);
+        knowledgeSync?.enqueue(workspace);
         skill.status = 'Active';
         skill.updatedAt = now().toISOString();
         activity(
@@ -535,6 +629,17 @@ export function createApp(options: AppOptions = {}) {
       author: user(res).name,
       tags: ['Imported document', skill.category],
     };
+    if (req.file && originals) {
+      try {
+        knowledge.original = await originals.put(
+          knowledge.id,
+          extname(req.file.originalname).toLowerCase(),
+          req.file.buffer,
+        );
+      } catch {
+        fail(503, 'Original document storage is unavailable. Check COS access and retry.');
+      }
+    }
     store.mutate((workspace) => {
       workspace.knowledge.unshift(knowledge);
       activity(
@@ -556,6 +661,7 @@ export function createApp(options: AppOptions = {}) {
           fail(404, 'Knowledge entry not found.');
         if (item.status === 'Approved') fail(409, 'This knowledge entry is already approved.');
         item.status = 'Approved';
+        knowledgeSync?.enqueue(workspace);
         const skill = workspace.skills.find((entry) => entry.id === item.skillId)!;
         skill.status = 'Active';
         skill.updatedAt = now().toISOString();
@@ -608,7 +714,25 @@ export function createApp(options: AppOptions = {}) {
     const snapshot = store.read();
     if (skillId && !snapshot.skills.some((skill) => skill.id === skillId))
       fail(400, 'Unknown agent skill.');
-    const answer = await answerQuestion(snapshot, message, category, skillId, ai);
+    const scope = JSON.stringify([user(res).id, skillId ?? '', category ?? '']);
+    if (activeConversations.has(scope)) fail(409, 'An answer is already in progress.');
+    const conversationId = store.mutate((workspace) => {
+      workspace.agentConversations ??= {};
+      return (workspace.agentConversations[scope] ??= randomUUID());
+    });
+    activeConversations.add(scope);
+    let answer: Awaited<ReturnType<typeof answerQuestion>>;
+    try {
+      answer = await answerQuestion(snapshot, message, category, skillId, ai, {
+        visitorId: createHash('sha256').update(user(res).id).digest('hex'),
+        conversationId,
+        documentMap: knowledgeSync?.documentMap(),
+      });
+    } finally {
+      activeConversations.delete(scope);
+    }
+    if (liveConfigured(ai) && (answer.mode === 'live' || provider === 'adp'))
+      noteConnection(answer.mode);
     const messages: ChatMessage[] = [
       {
         id: randomUUID(),
@@ -626,6 +750,47 @@ export function createApp(options: AppOptions = {}) {
       for (const message of messages) workspace.chatOwners[message.id] = user(res).id;
     });
     res.json(messages);
+  });
+  app.post('/api/integrations/check', async (_req, res) => {
+    manager(res);
+    if (!liveConfigured(ai)) fail(409, 'Configure an AI provider on the server first.');
+    const answer = await answerQuestion(
+      store.read(),
+      'What should I check about permit validity before a Singapore shipment? Cite an approved source.',
+      'General cargo',
+      undefined,
+      ai,
+      {
+        visitorId: createHash('sha256').update(user(res).id).digest('hex'),
+        conversationId: randomUUID(),
+        documentMap: knowledgeSync?.documentMap(),
+      },
+    );
+    noteConnection(answer.mode);
+    res.status(answer.mode === 'live' ? 200 : 502).json({
+      ...connection,
+      ...(answer.mode === 'live'
+        ? {}
+        : {
+            error:
+              'The provider did not return a usable, grounded answer. Check its published application and credentials.',
+          }),
+    });
+  });
+  app.get('/api/integrations/knowledge', (_req, res) => {
+    manager(res);
+    res.json({
+      ...(knowledgeSync?.summary() ?? { configured: false }),
+      jobs: Object.values(store.read().knowledgeSync ?? {}).filter(
+        (job) => job.target === knowledgeSync?.target,
+      ),
+    });
+  });
+  app.post('/api/integrations/knowledge/retry', (_req, res) => {
+    manager(res);
+    if (!knowledgeSync) fail(409, 'Knowledge synchronization is not configured.');
+    knowledgeSync!.retry();
+    res.json(knowledgeSync!.summary());
   });
   app.get('/api/export', (_req, res) => {
     manager(res);
@@ -649,14 +814,12 @@ export function createApp(options: AppOptions = {}) {
       return;
     }
     if (error instanceof multer.MulterError) {
-      res
-        .status(400)
-        .json({
-          error:
-            error.code === 'LIMIT_FILE_SIZE'
-              ? 'Files must be 10 MB or smaller.'
-              : 'The upload exceeds the allowed file or field limits.',
-        });
+      res.status(400).json({
+        error:
+          error.code === 'LIMIT_FILE_SIZE'
+            ? 'Files must be 10 MB or smaller.'
+            : 'The upload exceeds the allowed file or field limits.',
+      });
       return;
     }
     if (error instanceof SyntaxError && 'body' in error) {
@@ -673,5 +836,13 @@ export function createApp(options: AppOptions = {}) {
     );
     res.status(500).json({ error: 'The request could not be completed. Please try again.' });
   });
-  return { app, store, close: () => store.close() };
+  return {
+    app,
+    store,
+    knowledgeSync,
+    close: () => {
+      knowledgeSync?.stop();
+      store.close();
+    },
+  };
 }

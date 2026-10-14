@@ -32,6 +32,8 @@ export interface Knowledge {
   tags: string[];
   decision?: 'accepted' | 'rejected';
   caseId?: string;
+  adpStatus?: 'pending' | 'indexing' | 'ready' | 'publishing' | 'synced' | 'failed';
+  original?: { storage: 'cos'; key: string; size: number };
 }
 export interface Citation {
   id: string;
@@ -112,6 +114,20 @@ export interface AppState {
   comments: Comment[];
   chats: ChatMessage[];
   aiMode: 'local' | 'live';
+  integrations?: IntegrationState;
+}
+export interface IntegrationState {
+  provider: 'local' | 'openai' | 'adp';
+  connection: 'local' | 'configured' | 'verified' | 'error';
+  checkedAt?: string;
+  knowledge?: {
+    configured: boolean;
+    pending: number;
+    synced: number;
+    failed: number;
+    ready: number;
+    autoPublish: boolean;
+  };
 }
 export type CaseInput = Pick<
   CaseRecord,

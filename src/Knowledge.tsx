@@ -40,6 +40,14 @@ const sourceTypes: Partial<Record<Tab, Knowledge['sourceType']>> = {
   Documents: 'Document',
   Decisions: 'Decision',
 };
+const adpLabels = {
+  pending: 'ADP queued',
+  indexing: 'ADP indexing',
+  ready: 'ADP awaiting publication',
+  publishing: 'ADP publishing',
+  synced: 'ADP published',
+  failed: 'ADP sync failed',
+};
 
 function dateLabel(date: string) {
   const parsed = new Date(date);
@@ -412,6 +420,7 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
                   <span className="knowledge-subtitle">
                     {item.sourceType}
                     {item.decision ? ` · Suggestion ${item.decision}` : ''}
+                    {item.adpStatus ? ` · ${adpLabels[item.adpStatus]}` : ''}
                   </span>
                 </span>
               </span>

@@ -28,7 +28,7 @@ The discovery evidence is the [interview summary](USER_STORY_SUMMARY.md), [origi
 | Improve later work | Retrieve approved imported knowledge and reviewed decision records for subsequent cases and consultations. |
 | Preserve the operational context | Keep case content, recommendations, reviewer decisions, comments, and activity in an API-backed SQLite database. |
 
-The default advisor is deterministic retrieval and rule evaluation. An optional OpenAI-compatible server-side model adapter supports a configured provider, with a 20-second timeout and an explicitly identified local fallback. No connected model, Tencent service, government registry, email system, or production customs integration is claimed merely because its configuration or conceptual place in the architecture exists.
+The default advisor is deterministic retrieval and rule evaluation. Server-side adapters support Tencent Cloud International ADP's native SSE API and OpenAI-compatible providers, with a default 20-second timeout and explicit local fallback. Optional Tencent integrations synchronize approved knowledge through a persistent queue and archive original files in private Singapore COS storage. The application includes a manager-only connection check, publication status and retry controls. See [DEPLOY.md](../DEPLOY.md) and [ADP agent setup](../deploy/adp-agent.md). These integrations have local protocol tests; live Tencent access and cloud deployment still require account credentials and target-host verification. No connected service is claimed merely because its configuration exists.
 
 ## Architecture
 

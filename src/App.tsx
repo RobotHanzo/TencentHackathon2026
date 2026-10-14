@@ -604,7 +604,7 @@ export default function App() {
           {page === 'consult' && <ConsultPage state={state} refresh={refresh} toast={toast} />}
           {page === 'activity' && <ActivityPage state={state} openCase={setSelectedCase} />}
           {page === 'team' && <TeamPage state={state} />}
-          {page === 'settings' && <SettingsPage state={state} />}
+          {page === 'settings' && <SettingsPage state={state} refresh={refresh} toast={toast} />}
         </motion.main>
       </div>
       <AnimatePresence initial={false} mode="wait">
@@ -1817,7 +1817,48 @@ function TeamPage({ state }: { state: AppState }) {
     </>
   );
 }
-function SettingsPage({ state }: { state: AppState }) {
+function SettingsPage({
+  state,
+  refresh,
+  toast,
+}: {
+  state: AppState;
+  refresh: () => Promise<void>;
+  toast: (message: string) => void;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const integration = state.integrations;
+  const providerName =
+    integration?.provider === 'adp'
+      ? 'Tencent ADP'
+      : state.aiMode === 'live'
+        ? 'AI provider'
+        : 'Local advisor';
+  const checkConnection = async () => {
+    setChecking(true);
+    try {
+      await api('/integrations/check', { method: 'POST' });
+      toast('Connection verified with an approved source.');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Connection check failed.');
+    } finally {
+      await refresh();
+      setChecking(false);
+    }
+  };
+  const retryKnowledge = async () => {
+    setSyncing(true);
+    try {
+      await api('/integrations/knowledge/retry', { method: 'POST' });
+      toast('Approved knowledge queued for synchronization.');
+      await refresh();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Synchronization could not start.');
+    } finally {
+      setSyncing(false);
+    }
+  };
   return (
     <>
       <div className="page-heading">
@@ -1845,7 +1886,7 @@ function SettingsPage({ state }: { state: AppState }) {
             </div>
             <div>
               <dt>Storage</dt>
-              <dd>Local</dd>
+              <dd>Persistent database</dd>
             </div>
             <div>
               <dt>Approvals</dt>
@@ -1860,19 +1901,30 @@ function SettingsPage({ state }: { state: AppState }) {
           </div>
           <div className="connection-status">
             <span className="system-dot" />
-            <strong>{state.aiMode === 'live' ? 'Connected AI' : 'Local advisor'}</strong>
+            <strong>{providerName}</strong>
+            {state.aiMode === 'live' && (
+              <span
+                className={`badge ${integration?.connection === 'verified' ? 'badge-green' : integration?.connection === 'error' ? 'badge-red' : 'badge-neutral'}`}
+              >
+                {integration?.connection === 'verified'
+                  ? 'Verified'
+                  : integration?.connection === 'error'
+                    ? 'Check failed'
+                    : 'Not verified'}
+              </span>
+            )}
           </div>
           <p>
             {state.aiMode === 'live'
-              ? 'Uses approved knowledge. Falls back to local checks if unavailable.'
+              ? 'Approved sources. Local fallback when unavailable.'
               : 'Rule-based checks and knowledge search. No model connected.'}
           </p>
-          <details className="settings-details">
-            <summary>AI setup</summary>
-            <p>
-              Configure the provider in .env using .env.example. Credentials stay on the server.
-            </p>
-          </details>
+          {state.aiMode === 'live' && state.user.role === 'manager' && (
+            <button className="btn btn-secondary" onClick={checkConnection} disabled={checking}>
+              {checking && <Loader2 size={16} className="spin" />}
+              {checking ? 'Checking…' : 'Check connection'}
+            </button>
+          )}
         </section>
         <section className="panel settings-panel">
           <div className="section-heading">
@@ -1892,6 +1944,29 @@ function SettingsPage({ state }: { state: AppState }) {
           <div className="section-heading">
             <h2>Integrations</h2>
           </div>
+          {integration?.knowledge?.configured && (
+            <>
+              <div className="integration-row">
+                <span className="integration-logo">
+                  <BookOpen size={18} />
+                </span>
+                <strong>ADP knowledge</strong>
+                <span className="badge badge-green">{integration.knowledge.synced} published</span>
+              </div>
+              <p>
+                {integration.knowledge.pending} syncing · {integration.knowledge.ready} awaiting
+                publication · {integration.knowledge.failed} failed
+              </p>
+              {integration.knowledge.ready > 0 && !integration.knowledge.autoPublish && (
+                <p>Publish ready documents in your ADP application.</p>
+              )}
+              {state.user.role === 'manager' && (
+                <button className="btn btn-secondary" onClick={retryKnowledge} disabled={syncing}>
+                  {syncing ? 'Queuing…' : 'Sync approved knowledge'}
+                </button>
+              )}
+            </>
+          )}
           <div className="integration-row">
             <span className="integration-logo">SG</span>
             <strong>TradeNet</strong>

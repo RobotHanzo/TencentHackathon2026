@@ -16,6 +16,19 @@ services:
       DATA_PATH: /app/data/clearport.db
       APP_ACCESS_PASSWORD: ${APP_ACCESS_PASSWORD:?Set APP_ACCESS_PASSWORD in .env.deploy (at least 12 characters)}
       APP_USER_ID: ${APP_USER_ID:-manager-sarah}
+      APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      ADP_APP_KEY: ${ADP_APP_KEY:-}
+      ADP_ENDPOINT: ${ADP_ENDPOINT:-https://wss.lke.tencentcloud.com/adp/v2/chat}
+      ADP_KNOWLEDGE_SYNC: ${ADP_KNOWLEDGE_SYNC:-false}
+      ADP_APP_BIZ_ID: ${ADP_APP_BIZ_ID:-}
+      ADP_AUTO_PUBLISH: ${ADP_AUTO_PUBLISH:-false}
+      TENCENT_SECRET_ID: ${TENCENT_SECRET_ID:-}
+      TENCENT_SECRET_KEY: ${TENCENT_SECRET_KEY:-}
+      TENCENT_TOKEN: ${TENCENT_TOKEN:-}
+      TENCENT_REGION: ${TENCENT_REGION:-ap-jakarta}
+      COS_BUCKET: ${COS_BUCKET:-}
+      COS_REGION: ${COS_REGION:-ap-singapore}
       AI_BASE_URL: ${AI_BASE_URL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}

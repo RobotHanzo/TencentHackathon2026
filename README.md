@@ -58,15 +58,30 @@ Uploads are limited to 10 MB. PDF import extracts an existing text layer. Scanne
 
 The default advisor uses deterministic checks and retrieval from approved local knowledge. This makes the demo reproducible, but it is not a trained language model, a complete regulatory engine, or a guarantee of legal correctness. Model-free consultation can be less capable with unusual wording and novel cases.
 
-An optional server-side connection accepts an OpenAI-compatible provider configured through `.env`:
+The server supports Tencent ADP and OpenAI-compatible providers. For a published **Tencent Cloud International ADP** application, configure:
 
 ```dotenv
+AI_PROVIDER=adp
+ADP_APP_KEY=your-published-application-key
+ADP_ENDPOINT=https://wss.lke.tencentcloud.com/adp/v2/chat
+```
+
+ADP uses its native SSE API. Conversations are isolated by workspace user and selected skill; every document review starts a fresh conversation. The Settings page distinguishes configuration from a successful connection check. Unknown citations, failed requests and incomplete responses produce an explicit local fallback. See [the ADP agent setup](deploy/adp-agent.md) for the application instructions and [DEPLOY.md](DEPLOY.md) for credentials, Singapore hosting and verification.
+
+Optional ADP knowledge synchronization queues manager-approved imports and accepted/rejected decisions in SQLite, uploads immutable Markdown snapshots, and tracks indexing and publication. Retries resume after restart. Automatic publication is disabled by default because Tencent's documented release API publishes every draft in the ADP application; enable it only for a dedicated Clearport application. This management integration uses Tencent credentials separately from the chat AppKey. Its documented International API is marked deprecated, so verify compatibility with the actual account before relying on synchronization.
+
+An optional private Singapore COS bucket retains original uploaded files. With archival enabled, imports fail visibly if COS cannot store the original. Without it, the workspace retains extracted text only. Scanned-PDF OCR remains outside the current import flow.
+
+For an OpenAI-compatible provider:
+
+```dotenv
+AI_PROVIDER=openai
 AI_BASE_URL=https://your-provider.example/v1
 AI_API_KEY=your-provider-key
 AI_MODEL=your-provider-model
 ```
 
-Use the base URL and model identifier required by your provider; the server calls the provider's `/chat/completions` endpoint. Requests time out after 20 seconds, and failures or invalid responses fall back to an explicitly identified local result. Keep credentials out of source control. Configuring these values is not evidence of a completed external integration; verify the actual connection and the mode shown in the application before a demonstration. Enabling a remote provider can transmit case text, questions, and retrieved knowledge to that provider. Use approved data and an appropriate provider agreement for any real brokerage information.
+For this provider type, the server calls `/chat/completions`. Requests default to a 20-second timeout. `AI_PROVIDER=local` disables model calls; knowledge synchronization and COS archival have separate explicit configuration. Keep credentials out of source control. Configuration alone does not verify an external integration: use Settings → Check connection and inspect a real answer before demonstrating it. Remote providers receive case text, questions and supplied knowledge; knowledge synchronization and archival also transmit their configured document content.
 
 ## Five-minute product walkthrough
 

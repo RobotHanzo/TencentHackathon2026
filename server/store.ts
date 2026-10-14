@@ -3,10 +3,13 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { AppState } from '../shared/types.ts';
 import { seedWorkspace } from './seed.ts';
+import type { KnowledgeSyncJob } from './knowledge-sync.ts';
 
-export type Workspace = Omit<AppState, 'user' | 'aiMode'> & {
+export type Workspace = Omit<AppState, 'user' | 'aiMode' | 'integrations'> & {
   // Legacy messages without attribution remain in manager exports, not personal transcripts.
   chatOwners?: Record<string, string>;
+  agentConversations?: Record<string, string>;
+  knowledgeSync?: Record<string, KnowledgeSyncJob>;
 };
 
 /** A transaction commits each workflow transition and its knowledge/audit records together. */
