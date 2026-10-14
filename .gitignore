@@ -2,6 +2,11 @@ node_modules/
 dist/
 data/
 .env
+.env.*
+!.env.example
+!.env.deploy.example
+backups/
+clearport-backup-*/
 test-results/
 playwright-report/
 artifacts/

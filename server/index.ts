@@ -3,8 +3,10 @@ import { createApp } from './app.ts';
 
 const service = createApp();
 const port = Number(process.env.PORT ?? 3001);
-const server = service.app.listen(port, '127.0.0.1', () => {
-  console.log(`Clearport API running at http://127.0.0.1:${port}`);
+const host = process.env.HOST ?? '127.0.0.1';
+const server = service.app.listen(port, host, () => {
+  const displayHost = host.includes(':') ? `[${host}]` : host;
+  console.log(`Clearport API running at http://${displayHost}:${port}`);
   console.log(
     'Singapore workspace · internal approval only · no external declarations or messages are sent',
   );

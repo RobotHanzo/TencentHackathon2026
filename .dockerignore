@@ -1,0 +1,26 @@
+# Only source required for the build may enter the build context.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig.json
+!vite.config.ts
+!playwright.config.ts
+!index.html
+!src/
+!src/**
+!public/
+!public/**
+!server/
+!server/**
+!shared/
+!shared/**
+!tests/
+!tests/**
+**/.env
+**/.env.*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.pem
+**/*.key

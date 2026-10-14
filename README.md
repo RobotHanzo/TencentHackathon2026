@@ -26,6 +26,8 @@ npm start
 
 Open **http://127.0.0.1:3001**. This is a local demonstration setup; building static assets does not make the application ready for public deployment.
 
+For the Docker image, GitHub image-publishing workflow, and manual Compose deployment, see [DEPLOY.md](DEPLOY.md). The deployment guide includes persistent storage, HTTPS access, backups, and rollback; the workflow publishes images without deploying a remote server.
+
 The database is created at `data/clearport.db` on first run and seeded with fictional Singapore cases. It persists across browser reloads and server restarts. Set `DATA_PATH` to use another database path, or `PORT` to change the API port from `3001`.
 
 Available verification commands:
