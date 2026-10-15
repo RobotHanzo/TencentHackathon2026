@@ -10,6 +10,7 @@ import type {
   CaseRecord,
   Category,
   ChatMessage,
+  CommentAnchor,
   Knowledge,
   IntegrationState,
   User,
@@ -74,6 +75,33 @@ function caseInput(body: Record<string, unknown>): CaseInput {
     shipmentDate: date(body.shipmentDate, 'Shipment date'),
     warehouseConfirmed: body.warehouseConfirmed as boolean,
   };
+}
+
+function commentAnchor(value: unknown, item: CaseRecord): CommentAnchor | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return fail(400, 'The comment selection must be an anchor object.');
+  const { start, end, quote, revision } = value as Record<string, unknown>;
+  if (
+    typeof start !== 'number' ||
+    !Number.isSafeInteger(start) ||
+    start < 0 ||
+    typeof end !== 'number' ||
+    !Number.isSafeInteger(end) ||
+    end <= start ||
+    typeof quote !== 'string' ||
+    !quote.trim() ||
+    typeof revision !== 'number' ||
+    !Number.isSafeInteger(revision) ||
+    revision < 0
+  )
+    return fail(400, 'The comment selection needs valid text offsets, quoted text and a revision.');
+  // Check the version before comparing against text that may have changed or shortened.
+  if (revision !== (item.contentRevision ?? 0))
+    return fail(409, 'The document changed. Select text from the current version and try again.');
+  if (end > item.content.length || item.content.slice(start, end) !== quote)
+    return fail(400, 'The quoted text must exactly match the selected document text.');
+  return { start, end, quote, revision };
 }
 
 export interface AppOptions {
@@ -377,6 +405,7 @@ export function createApp(options: AppOptions = {}) {
     const created = store.mutate((workspace) => {
       const item: CaseRecord = {
         ...data,
+        contentRevision: 0,
         id: randomUUID(),
         reference: `CP-SG-${1043 + workspace.cases.length - 6}`,
         createdAt: now().toISOString(),
@@ -405,6 +434,7 @@ export function createApp(options: AppOptions = {}) {
       store.mutate((workspace) => {
         const item = record(workspace, req.params.id);
         editable(item, res);
+        if (item.content !== data.content) item.contentRevision = (item.contentRevision ?? 0) + 1;
         Object.assign(item, data, { review: null, status: 'Draft' });
         updated(item);
         activity(
@@ -579,12 +609,14 @@ export function createApp(options: AppOptions = {}) {
     res.status(201).json(
       store.mutate((workspace) => {
         const item = record(workspace, req.params.id);
+        const anchor = commentAnchor(req.body?.anchor, item);
         const comment = {
           id: randomUUID(),
           caseId: item.id,
           author: user(res).name,
           content,
           createdAt: now().toISOString(),
+          ...(anchor ? { anchor } : {}),
         };
         workspace.comments.push(comment);
         activity(workspace, res, 'comment', 'Comment added', content, item.id);

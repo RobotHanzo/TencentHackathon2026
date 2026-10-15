@@ -1,5 +1,6 @@
-# Use with compose.yaml on a Linux amd64 host in Tencent Cloud Singapore.
-# The existing loopback binding remains private; Caddy uses Docker's network.
+# Legacy HTTPS filename, retained for existing installations.
+# New deployments use compose.https.yaml; use only one HTTPS overlay at a time.
+# This file does not provision Tencent resources or enable Tencent APIs.
 services:
   clearport:
     environment:

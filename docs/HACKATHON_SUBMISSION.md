@@ -28,7 +28,7 @@ The discovery evidence is the [interview summary](USER_STORY_SUMMARY.md), [origi
 | Improve later work | Retrieve approved imported knowledge and reviewed decision records for subsequent cases and consultations. |
 | Preserve the operational context | Keep case content, recommendations, reviewer decisions, comments, and activity in an API-backed SQLite database. |
 
-The default advisor is deterministic retrieval and rule evaluation. Server-side adapters support Tencent Cloud International ADP's native SSE API and OpenAI-compatible providers, with a default 20-second timeout and explicit local fallback. Optional Tencent integrations synchronize approved knowledge through a persistent queue and archive original files in private Singapore COS storage. The application includes a manager-only connection check, publication status and retry controls. See [DEPLOY.md](../DEPLOY.md) and [ADP agent setup](../deploy/adp-agent.md). These integrations have local protocol tests; live Tencent access and cloud deployment still require account credentials and target-host verification. No connected service is claimed merely because its configuration exists.
+The default advisor is deterministic retrieval and rule evaluation. Server-side adapters support Tencent Cloud International ADP's native SSE API and OpenAI-compatible providers, with a default 20-second timeout and explicit local fallback. Optional Tencent integrations synchronize approved knowledge through a persistent queue and archive original files in private Singapore COS storage. The application includes a manager-only connection check, publication status and retry controls. The team operates Docker hosting; Tencent supplies the configured application services, with no CVM requirement. See [DEPLOY.md](../DEPLOY.md), [Tencent access](../deploy/tencent-access.md), and [ADP agent setup](../deploy/adp-agent.md). Local protocol tests do not establish live ADP/COS access; service entitlement and deployment still need verification.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ The default advisor is deterministic retrieval and rule evaluation. Server-side 
 flowchart TD
     Employee[Employee] --> UI[React and TypeScript workspace]
     Manager[Senior reviewer] --> UI
-    UI --> API[Express API on localhost]
+    UI --> API[Express API on your Docker host]
     API --> DB[(SQLite: cases, skills, knowledge, decisions, comments)]
     Files[PDF / DOCX / text / email / CSV] --> Extract[Text extraction]
     Extract --> Pending[Pending knowledge]
@@ -47,7 +47,9 @@ flowchart TD
     DB --> Retrieve[Approved knowledge retrieval]
     Router --> Retrieve
     Retrieve --> Checks[Deterministic checks and local response]
-    Retrieve -. optional configuration .-> Model[OpenAI-compatible model provider]
+    Retrieve -. optional configuration .-> Model[Tencent ADP or OpenAI-compatible provider]
+    Approved -. optional synchronization .-> ADPKnowledge[ADP knowledge library]
+    Extract -. optional original-file archive .-> COS[Private Singapore COS]
     Checks --> Advice[Advice with sources]
     Model -. optional .-> Advice
     Advice --> UI
@@ -56,7 +58,7 @@ flowchart TD
     Review --> HumanGate[Human document approval]
 ```
 
-The browser communicates with the local API; durable workflow data belongs to the server. Text extraction and knowledge retrieval run locally. The optional model boundary is explicit because using it can send document and knowledge content to a provider. Approval remains an internal human decision.
+The browser communicates with the API on the team's Docker host through HTTPS. Durable workflow data stays in its SQLite volume; text extraction and local retrieval run in Clearport. Optional Tencent connections are outbound HTTPS calls from the backend. ADP receives supplied context and, when enabled, approved knowledge snapshots; COS retains original files only when archival is configured. Approval remains an internal human decision.
 
 ## What makes this more than a chatbot
 
@@ -142,7 +144,7 @@ The controlling source is the supplied [hackathon handbook](hackathon_requiremen
 
 The handbook lists **16 October 2026** as the submission date and **3 November 2026 (TBC)** as Demo Day. These are dates from the supplied document, not a newly verified event schedule. It also requires teams of 1–3 participants based in Singapore; team eligibility must be established by the participants.
 
-Tencent ADP, Agent Runtime, Miora, and related cloud services are suggested tools in the handbook. They are not substitutes for its explicit CodeBuddy/WorkBuddy evidence gate. Optional provider compatibility is not an implemented Tencent integration or proof of product usage.
+Tencent ADP, Agent Runtime, Miora, and related cloud services are suggested tools in the handbook. They are not substitutes for its explicit CodeBuddy/WorkBuddy evidence gate. Configured integrations and local protocol tests do not prove live Tencent product usage.
 
 ## Singapore source references
 

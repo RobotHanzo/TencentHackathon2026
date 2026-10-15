@@ -1817,6 +1817,83 @@ p.muted {
   font-size: 12px;
   color: #b3bea5;
 }
+.document-annotation {
+  background: #fff0b3;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+  text-decoration: underline;
+  text-decoration-color: #d7ad41;
+  text-underline-offset: 3px;
+}
+.document-annotation:hover,
+.document-annotation.active {
+  background: #ffe18b;
+}
+.document-annotation:focus-visible,
+.document-content:focus-visible,
+.comment:focus-visible {
+  outline: 2px solid #7bbca7;
+  outline-offset: 3px;
+}
+.annotation-controls {
+  margin-top: 18px;
+}
+.annotation-toolbar,
+.annotation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.annotation-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  justify-content: space-between;
+  min-height: 58px;
+  margin-bottom: 12px;
+  padding: 8px 0;
+  background: white;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.annotation-composer {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fafcf7;
+}
+.annotation-actions,
+.annotation-composer .inline-error {
+  margin-top: 12px;
+}
+.comment-quote {
+  margin: 12px 0;
+  padding: 9px 12px;
+  border-left: 3px solid #d7ad41;
+  background: #fffae6;
+  color: #665627;
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.comment-passage-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.comment.active > div {
+  border-color: #99b887;
+}
 .edit-document {
   margin-top: 15px;
   font-size: 13px;
@@ -2867,7 +2944,8 @@ p.muted {
   font-size: 13px;
   color: #90a776;
 }
-.chat-citation summary {
+.chat-citation summary,
+.chat-citation-trigger {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2875,8 +2953,21 @@ p.muted {
   padding: 11px 12px;
   font-size: 13px;
 }
-.chat-citation summary > span {
+.chat-citation-trigger {
+  width: 100%;
+  text-align: left;
+}
+.chat-citation-trigger:hover {
+  background: #f5f9ef;
+}
+.chat-citation-trigger > svg {
+  flex-shrink: 0;
+}
+.chat-citation summary > span,
+.chat-citation-trigger > span {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .citation-number {
   padding: 1px 4px;
@@ -5209,6 +5300,7 @@ h3 {
   font-size: 14px;
 }
 .chat-citation summary,
+.chat-citation-trigger,
 .chat-citation > div {
   font-size: 16px;
 }
@@ -5710,6 +5802,7 @@ h3 {
     font-size: 16px;
   }
   .chat-citation summary,
+  .chat-citation-trigger,
   .chat-citation > div {
     font-size: 14px;
   }

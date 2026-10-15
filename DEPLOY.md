@@ -1,118 +1,103 @@
 # Deploy Clearport
 
-The GitHub workflow validates the application and publishes a container image to GHCR. Deploy that image to a **Linux amd64 Tencent CVM in Singapore** using Docker Compose. The supplied Caddy overlay provides HTTPS. The workflow does not connect to or update a remote server.
+You operate the Docker host, domain, HTTPS and backups. Tencent supplies the optional ADP agent, knowledge synchronization and Singapore COS archive. **No Tencent CVM or provisioning credentials are required.**
 
-This is a **single-instance, single-operator prototype** with SQLite and a fixed user identity. Container packaging does not add team authentication, SSO, or high availability. Use sample data until the access and governance limitations in the [README](README.md#access-governance-and-deployment-limits) are addressed.
+The GitHub workflow publishes a tested Linux amd64 image to GHCR. You choose when to pull and run it. This remains a single-instance, single-operator prototype with SQLite; see the [access limits](README.md#access-governance-and-deployment-limits).
 
-## Publish an image
+## Deployment layout
 
-The workflow in [.github/workflows/docker.yml](.github/workflows/docker.yml) runs the build, server tests, browser tests, and container smoke checks before publication. It publishes the exact tested `linux/amd64` image without rebuilding it.
-
-| Trigger                       | Result                                                                   |
-| ----------------------------- | ------------------------------------------------------------------------ |
-| Pull request targeting `main` | Validation only.                                                         |
-| Push to `main`                | Publish `main` and `sha-<full-40-character-commit-SHA>`.                 |
-| Push a `v*` tag               | Publish the exact tag, such as `v1.0.0`, and the full SHA tag.           |
-| Manual workflow dispatch      | Validate the selected ref; publish only when it is `main` or a `v*` tag. |
-
-For this repository, the image is `ghcr.io/robothanzo/tencenthackathon2026`. Forks use their own lowercase owner/repository name. The publishing job uses GitHub's `GITHUB_TOKEN` with `packages: write`; no registry password needs to be added to repository secrets. A newly published package is private by default. Keep it private and grant the intended account access, or explicitly change its visibility in the package settings. [GitHub Container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
-
-Wait for a successful publishing run before pulling an image. For private images, authenticate with a GitHub personal access token **(classic)** that has `read:packages` and access to the package. Supply the token through your secret manager or session environment, then use standard input:
-
-```powershell
-$env:GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+```mermaid
+flowchart LR
+    Browser[Employee / reviewer] -->|HTTPS| Proxy
+    subgraph Host["Your Docker host"]
+        Proxy[Caddy or your reverse proxy] --> App[Clearport: UI + API]
+        App --> DB[(SQLite volume)]
+    end
+    GHCR[GitHub Container Registry] -->|image pull| Host
+    App -->|optional: prompts + approved context| ADP[Tencent ADP]
+    App -. optional: approved snapshots .-> Knowledge[ADP knowledge library]
+    App -. optional: original uploads .-> COS[Private Singapore COS]
 ```
 
-In Bash, use `printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin`. Public images can be pulled anonymously. Do not put a registry token in the application environment file.
+Clearport keeps the authoritative cases, knowledge, comments and approval decisions in SQLite. ADP provides advice; people approve documents in Clearport. Tencent connections originate from the backend over HTTPS; ADP does not need an inbound callback to your host.
 
-## Prepare the Tencent host and credentials
+## 1. Prepare your host
 
-Use an existing Singapore CVM, or create one in the Tencent console after choosing its paid resources. Ubuntu 24.04 LTS on x86-64 is a suitable host. A starting point for this prototype is 2 vCPUs, 4 GiB RAM and 40 GiB disk; size it for actual document volume. Install Docker Engine and the Compose plugin using the [official Ubuntu instructions](https://docs.docker.com/engine/install/ubuntu/). No Node installation is needed on the server.
+Use a **Linux amd64** Docker host with Docker Engine and the Compose plugin. The published image targets amd64. Choose a host location appropriate for your data; the application's Singapore use case does not dictate its hosting provider.
 
-Keep this information available for deployment:
+Copy these files into one directory on your host, or check out the repository:
 
-| Item                                             | Where to get it / how to hand it over                                                                                                                                                                                      |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CVM public IP, SSH username and Singapore region | Tencent CVM instance details. The Linux username depends on the image; confirm it rather than assuming `root`.                                                                                                             |
-| SSH private key                                  | Keep the file on your computer and provide its **local path**, never its contents in chat, Git or an issue. Confirm the server's SSH host-key fingerprint through a trusted console before accepting the first connection. |
-| Domain and DNS access                            | Point a hostname's A record to the CVM public IPv4 address. Add an AAAA record only if that IPv6 address reaches this host. A domain is optional for the SSH-tunnel path below.                                            |
-| Certificate contact email                        | Set `CLEARPORT_TLS_EMAIL` for Caddy certificate notices.                                                                                                                                                                   |
-| App access password                              | Store a unique password of at least 12 characters in the host's ignored `.env.deploy` file. Use a password manager.                                                                                                        |
-| GHCR access, if the package is private           | A GitHub token with `read:packages` and access to the package; enter it interactively on the host. It is separate from app credentials.                                                                                    |
-| ADP application API key                          | Publish the intended ADP application, then copy its application API key from the application's API access settings into `ADP_APP_KEY`. This is **not** a Tencent Cloud account SecretKey or an application ID.             |
+- `compose.yaml`
+- `compose.https.yaml` if using the supplied Caddy proxy
+- `.env.deploy.example`
+- `deploy/Caddyfile` and `deploy/preflight.sh`
 
-No Tencent account-wide SecretId/SecretKey is needed to deploy to an existing host over SSH or to call the ADP chat endpoint with an application key. Optional ADP knowledge synchronization and original-file archival use separate, narrowly scoped Tencent API credentials; do not substitute those credentials for `ADP_APP_KEY`.
-
-Configure the CVM security group and host firewall to allow TCP **22 from your operator IP**, and TCP **80/443** for HTTPS access and certificate validation. Do not expose port 3001. Allow outbound HTTPS for image pulls, certificate issuance and the selected model provider. Caddy needs a hostname that resolves to the server, reachable ports and persistent certificate storage. [Caddy HTTPS requirements](https://caddyserver.com/docs/automatic-https).
-
-The application database resides on the selected CVM's Docker volume. Optional original-file archival requires an existing private Singapore COS bucket as described below; this package does not provision a bucket or schedule database backups. Singapore CVM placement does **not** establish ADP/model processing residency: the [ADP data-processing terms](https://www-sg.tencentcloud.com/document/product/1254/69989) do not provide a Singapore-only guarantee. Confirm the selected ADP tenant, endpoint and model processing/storage locations with Tencent before sending real customer documents. Until then, use fictional data, or keep both `AI_PROVIDER=local` and `ADP_KNOWLEDGE_SYNC=false`.
-
-## Configure the host
-
-Transfer `compose.yaml`, `compose.tencent.yaml`, `.env.deploy.example`, and the `deploy/` directory to the same directory on the CVM, for example `~/clearport`. These files contain no real credentials. From PowerShell, after confirming the host-key fingerprint:
-
-```powershell
-ssh -i "C:\Keys\clearport.pem" ubuntu@YOUR_CVM_IP "mkdir -p ~/clearport/deploy"
-scp -i "C:\Keys\clearport.pem" compose.yaml compose.tencent.yaml .env.deploy.example ubuntu@YOUR_CVM_IP:clearport/
-scp -i "C:\Keys\clearport.pem" deploy/Caddyfile deploy/preflight.sh ubuntu@YOUR_CVM_IP:clearport/deploy/
-```
-
-Replace the key path, username and IP with the actual target; do not disable SSH host-key verification.
-
-On the Linux host:
+Create the runtime configuration without overwriting an existing file:
 
 ```sh
-cd ~/clearport
 umask 077
 cp -n .env.deploy.example .env.deploy
 chmod 600 .env.deploy
 nano .env.deploy
 ```
 
-`cp -n` preserves an existing configuration. Edit it privately; do not paste credentials into shell command arguments or send the file through chat. Compose reads this ignored file; it is not part of the image. Docker administrators can inspect container environment variables, so restrict access to the host and Docker socket. Use single-quoted values if a password contains characters such as `$` that Compose would otherwise expand.
+Set `APP_ACCESS_PASSWORD` to a unique value of at least 12 characters. The login username is **clearport**. `APP_USER_ID` defaults to the seeded manager `manager-sarah`; it does not create a new identity. Quote values containing `$` with single quotes in the environment file to prevent Compose interpolation.
 
-| Setting                                 | Purpose                                                                                                                                                  |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLEARPORT_IMAGE`                       | A successfully published image. Prefer `ghcr.io/robothanzo/tencenthackathon2026:sha-<full-40-character-commit-SHA>` for repeatable deployment.           |
-| `CLEARPORT_PORT`                        | Private host port, default `3001`, bound to `127.0.0.1`.                                                                                                 |
-| `CLEARPORT_DOMAIN`                      | HTTPS hostname only, such as `clearport.example.com`; no scheme, path or port. Required by the Tencent overlay.                                          |
-| `CLEARPORT_TLS_EMAIL`                   | Certificate contact email. Required by the Tencent overlay.                                                                                              |
-| `APP_ACCESS_PASSWORD`                   | Required HTTP Basic password, at least 12 characters. Username: `clearport`.                                                                             |
-| `APP_USER_ID`                           | Fixed existing workspace user, default `manager-sarah`. It does not create an account.                                                                   |
-| `APP_COOKIE_SECURE`                     | The HTTPS overlay forces `true`. Base Compose defaults to `false` for localhost/SSH-tunnel HTTP.                                                         |
-| `AI_PROVIDER`                           | `local` (default), `adp`, or `openai`. Selecting `local` keeps model requests local.                                                                     |
-| `ADP_APP_KEY`                           | Published ADP application API key, required when selecting `adp`.                                                                                        |
-| `ADP_ENDPOINT`                          | Defaults to `https://wss.lke.tencentcloud.com/adp/v2/chat`. Use the endpoint applicable to your ADP application. Its hostname is not a region guarantee. |
-| `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | All three are required for the optional `openai` compatible provider.                                                                                    |
+| Setting               | Purpose                                                                         |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `CLEARPORT_IMAGE`     | Published GHCR image; prefer a `sha-<full-40-character-commit-SHA>` tag.        |
+| `CLEARPORT_PORT`      | Host loopback port; default `3001`.                                             |
+| `APP_ACCESS_PASSWORD` | Required application password.                                                  |
+| `APP_COOKIE_SECURE`   | `true` for HTTPS; `false` only for localhost or an SSH tunnel over HTTP.        |
+| `CLEARPORT_DOMAIN`    | Hostname without a scheme, path or port; required for the supplied HTTPS proxy. |
+| `CLEARPORT_TLS_EMAIL` | Certificate contact email for that proxy.                                       |
+| `AI_PROVIDER`         | `local` by default; choose `adp` after configuring the Tencent application.     |
 
-For ADP, set `AI_PROVIDER=adp` and fill `ADP_APP_KEY`. Follow the [agent setup and copyable instructions](deploy/adp-agent.md) before publishing the application. Enabling an external provider sends relevant prompts, document text and approved knowledge context to that provider. A chat connection alone does not prove that the platform's knowledge library has been synchronized into an ADP-managed knowledge base.
+Keep real values in the host's ignored `.env.deploy` or its secret manager. The old `.env.tencent` contains infrastructure-discovery credentials and is **not used by this deployment**. Do not copy it to the host, image or application configuration.
+
+## 2. Choose the Tencent features
+
+Start with the app's local advisor, or follow [Tencent application setup](deploy/tencent-access.md) to enable ADP:
+
+```dotenv
+AI_PROVIDER=adp
+ADP_APP_KEY='your-published-application-key'
+ADP_ENDPOINT=https://wss.lke.tencentcloud.com/adp/v2/chat
+ADP_KNOWLEDGE_SYNC=false
+ADP_AUTO_PUBLISH=false
+COS_BUCKET=
+```
+
+For chat and pre-review, `ADP_APP_KEY` is the only Tencent credential required. Leave `TENCENT_SECRET_ID`, `TENCENT_SECRET_KEY` and `TENCENT_TOKEN` blank in this mode. Use the [agent instructions](deploy/adp-agent.md) in a dedicated published ADP application.
+
+Chat-only mode sends relevant approved local context with each request. It does not synchronize the full knowledge library into ADP.
 
 ### Optional ADP knowledge synchronization
 
-Use a dedicated ADP application for Clearport and configure these additional settings privately:
-
-| Setting                                   | Purpose                                                                                                                                                                    |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ADP_KNOWLEDGE_SYNC`                      | Default `false`; set `true` to enable synchronization of approved knowledge. This sends content to ADP independently of the chat provider selection.                       |
-| `ADP_APP_BIZ_ID`                          | The ADP application's business ID used by the management API. It is separate from the application API key.                                                                 |
-| `TENCENT_SECRET_ID`, `TENCENT_SECRET_KEY` | Tencent API credentials for an identity allowed to manage this ADP application. Use a scoped CAM sub-account/role; do not share the account owner's credentials.           |
-| `TENCENT_TOKEN`                           | Session token when using temporary Tencent credentials; leave empty for a long-lived scoped key. Rotate or refresh credentials before they expire.                         |
-| `TENCENT_REGION`                          | Default `ap-jakarta` for the ADP management API. This is **not** the Singapore CVM region. Verify the selected API region and tenant entitlement in Tencent.               |
-| `ADP_AUTO_PUBLISH`                        | Default `false`: uploaded drafts wait for publication in the ADP console. `true` publishes **all drafts in the ADP app**, so enable it only for a dedicated Clearport app. |
-
-The integration uses the legacy LKE management API version `2023-11-30`, which Tencent marks deprecated in its [SaveDoc documentation](https://www.tencentcloud.com/document/product/1254/70209). Confirm that your account can use that API and the chosen region before relying on synchronization. Chat entitlement does not establish management-API entitlement. This path is application-scoped; it does not need a separate knowledge-base ID. ADP supplies a temporary upload location internally; no general-purpose COS bucket credentials are required for this sync path.
-
-Keep `ADP_KNOWLEDGE_SYNC=false` until these credentials and processing locations are confirmed. With synchronization enabled, check its status in the application and retry failures after resolving the cause. If automatic publication is off, publish the uploaded drafts in the ADP console before expecting the ADP agent to retrieve them. Verify the complete path with fictional notes first; configuration validation is not a live API test.
+Enable only after confirming the account supports the legacy management API and its usage is covered. It needs the application's business ID and a scoped runtime CAM identity in addition to the chat key. See [Tencent access](deploy/tencent-access.md) for settings, permissions and publication steps. Keep `ADP_AUTO_PUBLISH=false` initially: automatic publication releases every pending draft in that ADP application.
 
 ### Optional original-file archive in Singapore COS
 
-Create or select a dedicated **private** COS bucket in **Singapore (`ap-singapore`)**. Keep public-read and public-write access disabled. Set `COS_BUCKET` to the exact bucket name shown in the console, including its account suffix, and `COS_REGION=ap-singapore`. Leaving `COS_BUCKET` empty disables this feature. Setting an environment region does not move an existing bucket; confirm its actual location in the console.
+A private `ap-singapore` COS bucket can retain original uploads. It needs narrowly scoped upload permission and is independent of ADP's managed upload storage. See [Tencent access](deploy/tencent-access.md). This archive is **not a backup of SQLite**.
 
-Original uploaded files use this bucket independently of ADP knowledge synchronization. Give the configured Tencent identity only the required `cos:PutObject` access to this bucket's `originals/*` prefix. The app does not require public object URLs. The same `TENCENT_SECRET_ID`, `TENCENT_SECRET_KEY` and optional `TENCENT_TOKEN` settings serve the enabled sync/archive features; scope that identity to their combined required permissions rather than using the root account.
+Your Tencent spending limit remains **$0**. Self-hosting removes the CVM requirement; it does not make ADP or COS free. Keep `AI_PROVIDER=local`, `ADP_KNOWLEDGE_SYNC=false` and `COS_BUCKET` empty until the applicable service allowance and overage behavior are confirmed. No live Tencent usage is required to deploy the local mode.
 
-This archive preserves original uploads; it does not back up the SQLite workspace, reviewer decisions or Caddy certificates. Use the stopped-database backup procedure below, then upload that completed snapshot privately through the COS console if desired. No automatic backup schedule is supplied.
+## 3. Pull or build the image
 
-If GHCR is private, log in without placing the token in shell history or `.env.deploy`:
+For this repository, the registry is `ghcr.io/robothanzo/tencenthackathon2026`. Forks use their own lowercase owner/repository path.
+
+The [GitHub workflow](.github/workflows/docker.yml) builds and tests the application and container, then publishes the **same tested image**:
+
+| Trigger                | Result                                                        |
+| ---------------------- | ------------------------------------------------------------- |
+| Pull request to `main` | Validate only.                                                |
+| Push to `main`         | Publish `main` and `sha-<full-commit-SHA>`.                   |
+| Push a `v*` tag        | Publish that tag and the full SHA tag.                        |
+| Manual dispatch        | Validate the selected ref; publish only `main` or a `v*` tag. |
+
+The workflow uses GitHub's `GITHUB_TOKEN` with `packages: write`. It does not need Tencent credentials or SSH access and does not restart your host. Local uncommitted changes are not included in an existing registry image.
+
+For a private package, log in with an account that can read it and a personal access token (classic) with `read:packages`. Supply the token through standard input; keep it separate from `.env.deploy`. See [GitHub's container registry guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 ```sh
 read -r -p 'GitHub username: ' GHCR_USER
@@ -122,113 +107,79 @@ printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdi
 unset GHCR_TOKEN
 ```
 
-Docker retains registry login credentials in its configured credential store; protect that store. Use `docker logout ghcr.io` when access is no longer needed.
-
-## Deploy with HTTPS
-
-Run the read-only host preflight, pull the published images, validate Caddy and start the stack:
-
-```sh
-bash deploy/preflight.sh https
-docker compose --env-file .env.deploy -f compose.yaml -f compose.tencent.yaml pull
-docker compose --env-file .env.deploy -f compose.yaml -f compose.tencent.yaml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-docker compose --env-file .env.deploy -f compose.yaml -f compose.tencent.yaml up -d --wait
-docker compose --env-file .env.deploy -f compose.yaml -f compose.tencent.yaml ps
-```
-
-Open `https://YOUR_DOMAIN`. Caddy obtains and renews certificates and redirects HTTP to HTTPS. Its pinned image is `caddy:2.11.7-alpine`, corresponding to the [official Caddy release](https://github.com/caddyserver/caddy/releases/tag/v2.11.7). The proxy preserves the original Host header, accepts uploads up to 11 MB, and reaches the backend over the private Docker network. [Caddy reverse-proxy reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
-
-Check the unauthenticated health endpoint, then sign in through the browser with username `clearport` and the app password:
-
-```sh
-curl --fail --silent --show-error https://YOUR_DOMAIN/api/health
-```
-
-Confirm that HTTPS is trusted, the `clearport_session` cookie has `Secure`, `HttpOnly` and `SameSite=Strict`, and an unauthenticated `/api/state` request receives HTTP 401. Import a fictional note, publish it as the configured manager, and ask a relevant agent question. Verify the provider shown in the answer and its citations. Health reports process/configuration status; it does **not** validate an ADP key, quota or model response.
-
-The root filesystem is read-only; `clearport_data` stores SQLite and `caddy_data`/`caddy_config` retain Caddy state. Caddy starts only after the app health check passes. Never scale the app to multiple replicas against this SQLite volume. Inspect errors with `docker compose --env-file .env.deploy -f compose.yaml -f compose.tencent.yaml logs --tail=100`, but do not share logs before checking for sensitive content. Use `config --quiet`, never plain `config`, in shared terminals or CI because rendered Compose configuration contains secrets.
-
-## Localhost or SSH tunnel (no domain)
-
-Use a Docker host with Linux containers and a current Docker Compose plugin. Published images target `linux/amd64`. Run commands from a checkout containing [compose.yaml](compose.yaml).
-
-Configure [.env.deploy.example](.env.deploy.example) as described above. For a fresh local PowerShell checkout, preserve any existing configuration:
-
-```powershell
-if (-not (Test-Path .env.deploy)) { Copy-Item .env.deploy.example .env.deploy }
-```
-
-On Linux/macOS, use `cp -n .env.deploy.example .env.deploy`. Set a strong, unique `APP_ACCESS_PASSWORD` of at least 12 characters and keep `APP_COOKIE_SECURE=false` for this HTTP-only path. `.env.deploy` is ignored by Git; restrict access to it on the deployment host.
-
-| Setting in `.env.deploy`                | Purpose                                                                                                                      |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `CLEARPORT_IMAGE`                       | Defaults to `ghcr.io/robothanzo/tencenthackathon2026:main`. Prefer a published full SHA tag for a repeatable deployment.     |
-| `CLEARPORT_PORT`                        | Host port, default `3001`, bound to `127.0.0.1`. Use another port, such as `3002`, if the local development API occupies it. |
-| `APP_ACCESS_PASSWORD`                   | Required HTTP Basic password.                                                                                                |
-| `APP_USER_ID`                           | Fixed existing workspace user, default `manager-sarah`. This does not create an account.                                     |
-| `AI_PROVIDER`                           | Use `local`, `adp`, or `openai` as described above.                                                                          |
-| `ADP_APP_KEY`, `ADP_ENDPOINT`           | Tencent ADP connection when `AI_PROVIDER=adp`.                                                                               |
-| `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` | Optional provider connection when `AI_PROVIDER=openai`.                                                                      |
-
-```sh
-docker compose --env-file .env.deploy pull
-docker compose --env-file .env.deploy up -d --wait
-docker compose --env-file .env.deploy ps
-docker compose --env-file .env.deploy logs --tail=100 clearport
-```
-
-Open `http://127.0.0.1:3001` using your chosen host port. The HTTP Basic username is **`clearport`** and the password is your `APP_ACCESS_PASSWORD`. `/api/health` is intentionally unauthenticated; the container health check uses it. A healthy container indicates the process is responding, not that an optional AI provider has been validated.
-
-The first run seeds **fictional Singapore cases and users**, including in non-demo mode. Subsequent runs retain the workspace in the `clearport_data` volume mounted at `/app/data`; Compose prefixes the Docker volume name with the project name, `clearport`. The database is `/app/data/clearport.db`. Keep the same project name and volume when updating so the existing workspace remains attached.
-
-Compose fixes `NODE_ENV=production`, `DEMO_MODE=false`, `HOST=0.0.0.0`, and container `PORT=3001`. The service runs as the unprivileged `node` user, with a read-only root filesystem, writable data volume and temporary directory, dropped capabilities, and no privilege escalation. Its restart policy is `unless-stopped`, with a 30-second graceful-stop period. Persona switching is disabled, and authors still cannot approve their own documents.
-
-## Build locally instead
-
-This path does not require a published GHCR image:
+Alternatively, build your current checkout on a Linux amd64 Docker host:
 
 ```sh
 docker build -t clearport:local .
 ```
 
-Set `CLEARPORT_IMAGE=clearport:local` in `.env.deploy`, then run:
+Set `CLEARPORT_IMAGE=clearport:local`, skip the image pull, and use `up -d --wait --pull never` for base Compose. With the Caddy overlay, first pull its image separately using `docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml pull caddy`.
+
+## 4. Start the containers
+
+Choose one of these access paths. Keep the same Compose files for later updates and restarts.
+
+### Supplied HTTPS proxy
+
+Point the hostname's DNS to your host. Allow inbound TCP 80/443 for Caddy and certificate validation; keep port 3001 private. Provide `CLEARPORT_DOMAIN` and `CLEARPORT_TLS_EMAIL`. Caddy needs outbound certificate-service access and persistent volumes. See [Caddy HTTPS requirements](https://caddyserver.com/docs/automatic-https).
 
 ```sh
-docker compose --env-file .env.deploy up -d --wait --pull never
+bash deploy/preflight.sh https
+docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml pull
+docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml up -d --wait
+docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml ps
 ```
 
-The multistage image uses Node 24 on Debian Bookworm Slim, builds the client with the locked dependencies, and installs runtime dependencies separately. The final command is `node --import tsx server/index.ts`.
+Open `https://YOUR_DOMAIN`. The overlay forces secure cookies, preserves the original Host header and allows request bodies up to 11 MB for the app's 10 MB upload limit.
 
-## Existing reverse proxy
+`compose.tencent.yaml` is retained as the legacy name for the same HTTPS configuration. Existing installations can keep using it, or replace that filename with `compose.https.yaml` while keeping the project name and volumes. Use **one HTTPS overlay**, not both.
 
-Base Compose exposes the service only on the Docker host's loopback interface. The Tencent overlay supplies Caddy; alternatively, use your own HTTPS reverse proxy and set `APP_COOKIE_SECURE=true` in `.env.deploy`. Preserve the original `Host` header so the application's same-origin checks work. The app does not need to trust forwarded protocol headers to mark the cookie secure.
+### Your existing HTTPS proxy
 
-For an existing HTTPS Nginx server, the relevant location block is below. Adjust the upstream port if you changed `CLEARPORT_PORT`; the 11 MB request limit accommodates a 10 MB upload plus multipart overhead. [Nginx proxy directives](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_cookie_flags).
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:3001;
-    proxy_set_header Host $host;
-    proxy_cookie_flags clearport_session secure;
-    client_max_body_size 11m;
-}
-```
-
-Keep the backend port private and serve the external site exclusively over HTTPS. A proxy running in another container needs explicit networking; its own `127.0.0.1` does not refer to the Clearport host.
-
-For an operator-only connection without a domain, start **base Compose only**, keep `APP_COOKIE_SECURE=false`, and allow SSH from your operator IP. From your local computer:
+Use base `compose.yaml` and set `APP_COOKIE_SECURE=true`. A proxy on the same host can forward to `http://127.0.0.1:3001`; preserve the original Host header and permit an 11 MB request body. A proxy in another container must share a private Docker network with Clearport and forward to `clearport:3001`; its own loopback address does not reach Clearport. Configure that shared network in your own Compose overlay.
 
 ```sh
-ssh -i /path/to/private-key -N -L 127.0.0.1:3002:127.0.0.1:3001 user@your-server
+docker compose --env-file .env.deploy config --quiet
+docker compose --env-file .env.deploy pull
+docker compose --env-file .env.deploy up -d --wait
 ```
 
-While the tunnel is open, visit `http://127.0.0.1:3002` and use the same Basic credentials. Adjust both ports to match your setup.
+### Localhost or SSH tunnel
 
-## Backup, update, and roll back
+Use base Compose, keep `APP_COOKIE_SECURE=false`, and leave the domain settings empty:
 
-The commands below use base Compose and affect the app only. If you deployed the HTTPS overlay, add `-f compose.yaml -f compose.tencent.yaml` to each Compose command to preserve the HTTPS cookie setting and manage the complete stack. Keep both Caddy volumes across updates so certificates and account keys persist.
+```sh
+bash deploy/preflight.sh tunnel
+docker compose --env-file .env.deploy pull
+docker compose --env-file .env.deploy up -d --wait
+```
 
-Before changing versions, record the current `CLEARPORT_IMAGE` and back up the **entire data directory while the service is stopped**. Use a new destination name for every backup:
+For a remote host, open an SSH tunnel from your computer using your existing SSH access:
+
+```sh
+ssh -N -L 127.0.0.1:3002:127.0.0.1:3001 user@your-host
+```
+
+Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own computer, visit `http://127.0.0.1:3001`. Change `CLEARPORT_PORT` and the tunnel destination together if the host port is occupied.
+
+## 5. Verify
+
+1. Request `/api/health` on the deployed site. It should report `ok: true`; this checks the app, not provider entitlement.
+2. Confirm unauthenticated `/api/state` returns 401, then sign in as `clearport` with your application password.
+3. With HTTPS, confirm the session cookie has `Secure`, `HttpOnly` and `SameSite=Strict`.
+4. Import fictional knowledge, approve it, review a fictional case, and inspect advice and citations.
+5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success.
+
+The first run seeds fictional Singapore records. Data persists in the `clearport_data` volume at `/app/data/clearport.db`. Keep one app instance and the same Compose project name (`clearport`) when updating.
+
+Use `config --quiet` for validation: plain `config` prints interpolated secrets. Review container logs privately before sharing them.
+
+## Backup, update and rollback
+
+The following commands use base Compose. If using Caddy, add `-f compose.yaml -f compose.https.yaml` to **every** command so the HTTPS settings remain applied.
+
+Stop the app while copying the entire data directory. Replace the backup name with a new timestamp:
 
 ```sh
 docker compose --env-file .env.deploy stop clearport
@@ -236,16 +187,16 @@ docker compose --env-file .env.deploy cp clearport:/app/data/. ./clearport-backu
 docker compose --env-file .env.deploy start --wait clearport
 ```
 
-Replace the date placeholder with a unique name. Check that the backup contains `clearport.db`, and retain any `-wal` or `-shm` files present. Copying only the database while it is active can produce an inconsistent snapshot. Store the backup securely outside the container host. [Docker Compose copy reference](https://docs.docker.com/reference/cli/docker/compose/cp/), [SQLite backup guidance](https://www.sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active).
+Preserve any SQLite WAL/SHM files with their matching database and keep the completed backup outside the host. With Caddy, also retain its `caddy_data` and `caddy_config` volumes. Original-file COS archival does not cover these volumes. See [SQLite backup guidance](https://www.sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active).
 
-For an update, set `CLEARPORT_IMAGE` to a successfully published tag such as `ghcr.io/robothanzo/tencenthackathon2026:sha-<full-40-character-SHA>`, then run:
+Record the current image reference, update `CLEARPORT_IMAGE` to a tested tag, then:
 
 ```sh
 docker compose --env-file .env.deploy pull
 docker compose --env-file .env.deploy up -d --wait
-docker compose --env-file .env.deploy logs --tail=100 clearport
+docker compose --env-file .env.deploy ps
 ```
 
-Confirm login, existing knowledge, and a sample workflow. To roll back application code, restore the previous full SHA image reference and repeat those commands. The image change does not roll back the database: use an older image only with compatible data. If data restoration is needed, stop the service and restore the complete snapshot into an empty data volume, with ownership writable by UID/GID `1000:1000`, before restarting. Do not mix a restored database with another snapshot's WAL files.
+Verify login, retained records and the chosen provider. To roll back code, restore the previous compatible image reference and repeat. An image rollback does not roll back data; restore a matching full database snapshot only with the app stopped and the target data directory empty, owned by UID/GID `1000:1000`.
 
-`docker compose down` retains the named volume. **Do not use `down -v` unless you intend to delete the stored workspace.** Run one service instance against its local volume; this SQLite prototype is not configured for replicas or a shared network filesystem.
+`docker compose down` keeps named volumes. **Do not use `down -v` unless you intend to delete the stored workspace.**

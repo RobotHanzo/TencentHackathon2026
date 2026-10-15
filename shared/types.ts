@@ -68,6 +68,8 @@ export interface CaseRecord {
   jurisdiction: Jurisdiction;
   documentType: 'Customs declaration' | 'Customer email' | 'Contract';
   content: string;
+  /** Legacy records without a revision are revision zero. */
+  contentRevision?: number;
   permitNumber: string;
   permitExpiry: string;
   shipmentDate: string;
@@ -88,12 +90,19 @@ export interface Activity {
   createdAt: string;
   caseId?: string;
 }
+export interface CommentAnchor {
+  start: number;
+  end: number;
+  quote: string;
+  revision: number;
+}
 export interface Comment {
   id: string;
   caseId: string;
   author: string;
   content: string;
   createdAt: string;
+  anchor?: CommentAnchor;
 }
 export interface ChatMessage {
   id: string;

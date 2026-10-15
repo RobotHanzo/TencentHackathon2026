@@ -26,7 +26,7 @@ npm start
 
 Open **http://127.0.0.1:3001**. This is a local demonstration setup; building static assets does not make the application ready for public deployment.
 
-For the Docker image, GitHub image-publishing workflow, and manual Compose deployment, see [DEPLOY.md](DEPLOY.md). The deployment guide includes persistent storage, HTTPS access, backups, and rollback; the workflow publishes images without deploying a remote server.
+Host the Docker containers on your own Linux amd64 server using [DEPLOY.md](DEPLOY.md). GitHub publishes tested images to GHCR; you control rollout, HTTPS and backups. Tencent is used for [ADP and optional knowledge/storage services](deploy/tencent-access.md), with no CVM requirement.
 
 The database is created at `data/clearport.db` on first run and seeded with fictional Singapore cases. It persists across browser reloads and server restarts. Set `DATA_PATH` to use another database path, or `PORT` to change the API port from `3001`.
 
@@ -66,7 +66,7 @@ ADP_APP_KEY=your-published-application-key
 ADP_ENDPOINT=https://wss.lke.tencentcloud.com/adp/v2/chat
 ```
 
-ADP uses its native SSE API. Conversations are isolated by workspace user and selected skill; every document review starts a fresh conversation. The Settings page distinguishes configuration from a successful connection check. Unknown citations, failed requests and incomplete responses produce an explicit local fallback. See [the ADP agent setup](deploy/adp-agent.md) for the application instructions and [DEPLOY.md](DEPLOY.md) for credentials, Singapore hosting and verification.
+ADP uses its native SSE API. Conversations are isolated by workspace user and selected skill; every document review starts a fresh conversation. The Settings page distinguishes configuration from a successful connection check. Unknown citations, failed requests and incomplete responses produce an explicit local fallback. Chat needs only the published application key; it does not require CVM or CAM credentials. See [the ADP agent setup](deploy/adp-agent.md), [Tencent access](deploy/tencent-access.md), and [DEPLOY.md](DEPLOY.md) for self-hosting and verification.
 
 Optional ADP knowledge synchronization queues manager-approved imports and accepted/rejected decisions in SQLite, uploads immutable Markdown snapshots, and tracks indexing and publication. Retries resume after restart. Automatic publication is disabled by default because Tencent's documented release API publishes every draft in the ADP application; enable it only for a dedicated Clearport application. This management integration uses Tencent credentials separately from the chat AppKey. Its documented International API is marked deprecated, so verify compatibility with the actual account before relying on synchronization.
 

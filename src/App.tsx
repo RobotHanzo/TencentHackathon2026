@@ -36,10 +36,19 @@ import {
   CornerDownRight,
   CircleDot,
 } from 'lucide-react';
-import type { AppState, CaseInput, CaseRecord, Category, Suggestion } from '../shared/types';
+import type {
+  AppState,
+  CaseInput,
+  CaseRecord,
+  Category,
+  Comment,
+  CommentAnchor,
+  Suggestion,
+} from '../shared/types';
 import { api } from './api';
 import { KnowledgePage } from './Knowledge';
 import { ConsultPage } from './Consult';
+import { AnnotatedDocument, isCurrentAnchor } from './AnnotatedDocument';
 import { useMotionSettings } from './motion';
 
 type Page = 'overview' | 'knowledge' | 'reviews' | 'consult' | 'activity' | 'team' | 'settings';
@@ -1234,8 +1243,19 @@ function CaseDetail({
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [comment, setComment] = useState('');
+  const [postedComments, setPostedComments] = useState<Comment[]>([]);
   const [finalComment, setFinalComment] = useState('');
   const [tab, setTab] = useState('Document');
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const discussionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (tab !== 'Discussion' || !activeCommentId) return;
+    const target = [
+      ...(discussionRef.current?.querySelectorAll<HTMLElement>('[data-comment-id]') ?? []),
+    ].find((element) => element.dataset.commentId === activeCommentId);
+    target?.scrollIntoView({ block: 'center', behavior: 'instant' });
+    target?.focus({ preventScroll: true });
+  }, [tab, activeCommentId]);
   const manager = state.user.role === 'manager';
   const canEdit = manager || record.ownerId === state.user.id;
   const allDecided =
@@ -1253,7 +1273,37 @@ function CaseDetail({
       setBusy('');
     }
   }
-  const caseComments = state.comments.filter((c) => c.caseId === record.id);
+  const caseComments = [
+    ...state.comments.filter((c) => c.caseId === record.id),
+    ...postedComments.filter((c) => !state.comments.some((saved) => saved.id === c.id)),
+  ];
+  async function postComment(content: string, anchor?: CommentAnchor) {
+    setBusy(`/cases/${record.id}/comments`);
+    setError('');
+    try {
+      let saved: Comment;
+      try {
+        saved = await api<Comment>(`/cases/${record.id}/comments`, {
+          method: 'POST',
+          body: JSON.stringify({ content, ...(anchor ? { anchor } : {}) }),
+        });
+      } catch (failure) {
+        // Refresh a stale document while preserving the comment draft for reselection.
+        await refresh().catch(() => undefined);
+        throw failure;
+      }
+      // Acknowledged writes remain saved even if reloading the workspace fails.
+      setPostedComments((existing) => [...existing, saved]);
+      try {
+        await refresh();
+        toast('Comment added');
+      } catch {
+        toast('Comment saved. Refresh to update the workspace.');
+      }
+    } finally {
+      setBusy('');
+    }
+  }
   return (
     <Modal
       title={record.title}
@@ -1295,50 +1345,64 @@ function CaseDetail({
               History
             </button>
           </div>
-          {tab === 'Document' && (
-            <>
-              <div className="document-paper">
-                <div className="paper-topline">
-                  <Logo small />
-                  <span>INTERNAL REVIEW COPY</span>
-                </div>
-                <h3>{record.title}</h3>
-                <div className="paper-metadata">
-                  <span>
-                    Customer<strong>{record.customer}</strong>
-                  </span>
-                  <span>
-                    Expected shipment<strong>{record.shipmentDate}</strong>
-                  </span>
-                  <span>
-                    Supporting authorisation<strong>{record.permitNumber || 'Not supplied'}</strong>
-                  </span>
-                  <span>
-                    Documented valid until<strong>{record.permitExpiry || 'Not supplied'}</strong>
-                  </span>
-                </div>
-                <div className="document-content">{record.content}</div>
-                <div className="paper-footer">
-                  <span>Singapore operations</span>
-                  <span>{record.reference}</span>
-                </div>
+          <div hidden={tab !== 'Document'}>
+            <div className="document-paper">
+              <div className="paper-topline">
+                <Logo small />
+                <span>INTERNAL REVIEW COPY</span>
               </div>
-              {canEdit && record.status !== 'Approved' && record.status !== 'In review' && (
-                <button className="btn btn-secondary edit-document" onClick={onEdit}>
-                  <FileText size={15} />
-                  Edit document
-                </button>
-              )}
-              <p className="document-disclaimer">
-                Internal approval only. Nothing is sent externally.
-              </p>
-            </>
-          )}
+              <h3>{record.title}</h3>
+              <div className="paper-metadata">
+                <span>
+                  Customer<strong>{record.customer}</strong>
+                </span>
+                <span>
+                  Expected shipment<strong>{record.shipmentDate}</strong>
+                </span>
+                <span>
+                  Supporting authorisation<strong>{record.permitNumber || 'Not supplied'}</strong>
+                </span>
+                <span>
+                  Documented valid until<strong>{record.permitExpiry || 'Not supplied'}</strong>
+                </span>
+              </div>
+              <AnnotatedDocument
+                record={record}
+                comments={caseComments}
+                active={tab === 'Document'}
+                busy={!!busy}
+                activeCommentId={activeCommentId}
+                onPost={postComment}
+                onOpenComment={(id) => {
+                  setActiveCommentId(id);
+                  setTab('Discussion');
+                }}
+              />
+              <div className="paper-footer">
+                <span>Singapore operations</span>
+                <span>{record.reference}</span>
+              </div>
+            </div>
+            {canEdit && record.status !== 'Approved' && record.status !== 'In review' && (
+              <button className="btn btn-secondary edit-document" onClick={onEdit}>
+                <FileText size={15} />
+                Edit document
+              </button>
+            )}
+            <p className="document-disclaimer">
+              Internal approval only. Nothing is sent externally.
+            </p>
+          </div>
           {tab === 'Discussion' && (
-            <div className="discussion">
+            <div className="discussion" ref={discussionRef}>
               <h3>Discussion</h3>
               {caseComments.map((c) => (
-                <div className="comment" key={c.id}>
+                <div
+                  className={`comment${c.id === activeCommentId ? ' active' : ''}`}
+                  key={c.id}
+                  data-comment-id={c.id}
+                  tabIndex={-1}
+                >
                   <span className="avatar">
                     {c.author
                       .split(' ')
@@ -1349,6 +1413,25 @@ function CaseDetail({
                   <div>
                     <strong>{c.author}</strong>
                     <small>{timeLabel(c.createdAt)}</small>
+                    {c.anchor && (
+                      <>
+                        <blockquote className="comment-quote">{c.anchor.quote}</blockquote>
+                        {isCurrentAnchor(record, c.anchor) ? (
+                          <button
+                            type="button"
+                            className="comment-passage-link"
+                            onClick={() => {
+                              setActiveCommentId(c.id);
+                              setTab('Document');
+                            }}
+                          >
+                            View passage
+                          </button>
+                        ) : (
+                          <small className="comment-version">Earlier version</small>
+                        )}
+                      </>
+                    )}
                     <p>{c.content}</p>
                   </div>
                 </div>
@@ -1362,8 +1445,16 @@ function CaseDetail({
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
-                  await act(`/cases/${record.id}/comments`, { content: comment }, 'Comment added');
-                  setComment('');
+                  try {
+                    await postComment(comment);
+                    setComment('');
+                  } catch (failure) {
+                    setError(
+                      failure instanceof Error
+                        ? failure.message
+                        : 'Could not add comment. Try again.',
+                    );
+                  }
                 }}
               >
                 <label className="field">
@@ -1373,6 +1464,8 @@ function CaseDetail({
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     rows={3}
+                    maxLength={4000}
+                    disabled={!!busy}
                     placeholder="Add a note…"
                   />
                 </label>

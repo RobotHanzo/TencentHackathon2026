@@ -33,7 +33,7 @@ fi
 
 compose=(docker compose --env-file .env.deploy -f compose.yaml)
 if [[ "$mode" == "https" ]]; then
-  compose+=(-f compose.tencent.yaml)
+  compose+=(-f compose.https.yaml)
 fi
 # --quiet avoids printing interpolated application and provider credentials.
 "${compose[@]}" config --quiet

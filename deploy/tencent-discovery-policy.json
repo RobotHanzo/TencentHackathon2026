@@ -1,0 +1,24 @@
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": [
+        "name/cvm:DescribeInstances",
+        "name/cvm:DescribeRegions",
+        "name/cvm:DescribeZones",
+        "name/cvm:DescribeImages",
+        "name/cvm:DescribeInstanceTypeConfigs",
+        "name/cvm:DescribeZoneInstanceConfigInfos",
+        "name/cvm:DescribeKeyPairs",
+        "name/cvm:InquiryPriceRunInstances"
+      ],
+      "resource": ["*"]
+    },
+    {
+      "effect": "allow",
+      "action": ["name/billing:DescribeVoucherInfo"],
+      "resource": ["*"]
+    }
+  ]
+}

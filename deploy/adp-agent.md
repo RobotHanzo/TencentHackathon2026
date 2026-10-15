@@ -1,15 +1,17 @@
 # Configure the Clearport ADP agent
 
-Create a **dedicated ADP application** for this Clearport workspace. Keep chat and knowledge-management credentials in the server's `.env.deploy`, never in the browser or the agent prompt. Confirm your ADP account supports the [international HTTP SSE chat API](https://intl.cloud.tencent.com/zh/document/product/1254/81449) and, if enabling synchronization, the legacy management API described in [DEPLOY.md](../DEPLOY.md#optional-adp-knowledge-synchronization).
+Create a **dedicated ADP application** for the Clearport containers you operate on your own host. Clearport retains the approval workflow, audit history and SQLite knowledge base. Tencent supplies the advisor; managed knowledge synchronization is optional. Keep credentials in the host's `.env.deploy`, never in the browser or the agent prompt. Follow the [integration access guide](tencent-access.md) for credential scopes and the $0 spending constraint.
+
+Confirm your application's free model allowance, knowledge capacity, expiry and paid-overage settings before enabling external calls. Until zero-cost usage is established, keep `AI_PROVIDER=local`, `ADP_KNOWLEDGE_SYNC=false` and `COS_BUCKET` empty. Console previews and **Check connection** also consume provider resources; configuration alone does not verify free coverage.
 
 ## Application setup
 
-1. In ADP, create a knowledge Q&A application using the standard agent mode. Select a model your account is entitled to use; the hackathon guide's DeepSeek allowance must be available in your account before relying on it.
-2. Enable knowledge retrieval for this application's knowledge library. Keep external web search and action tools disabled. The agent must not send email, lodge declarations, approve documents or modify records. Clearport handles those workflow decisions.
+1. In ADP, create a knowledge Q&A application using the standard agent mode after confirming its free entitlement. Select a covered model; the hackathon guide's DeepSeek allowance must be available in your account before relying on it.
+2. Enable knowledge retrieval if using synchronized documents. The initial AppKey-only connection can use the approved local context Clearport supplies without a populated ADP library. Keep external web search and action tools disabled. The agent must not send email, lodge declarations, approve documents or modify records. Clearport handles those workflow decisions.
 3. Paste the instructions below into the application's role/instructions field. The backend also supplies a task-specific `SystemRole` for each request.
-4. Publish the application. Copy its application API key into `ADP_APP_KEY`, set `AI_PROVIDER=adp`, and confirm `ADP_ENDPOINT` matches the application's supported endpoint. The default is `https://wss.lke.tencentcloud.com/adp/v2/chat`.
-5. For synchronized knowledge, configure the separate business ID and Tencent API credentials in [DEPLOY.md](../DEPLOY.md#optional-adp-knowledge-synchronization). Keep `ADP_AUTO_PUBLISH=false` initially. Publish the uploaded document drafts in ADP after reviewing them.
-6. Restart Clearport with the same Compose files used for deployment, then use **Settings → Check connection** as a manager. This makes a real provider request using an approved source. A configured status alone is not a successful connection test.
+4. Publish the application. Copy its application API key into `ADP_APP_KEY` and, only after confirming covered usage, set `AI_PROVIDER=adp`. No Tencent SecretId/SecretKey is needed for chat alone. The supported [HTTPS POST/SSE endpoint](https://intl-sg.tencent-cloud.com/document/product/1254/81449) defaults to `https://wss.lke.tencentcloud.com/adp/v2/chat`; do not substitute a WebSocket endpoint.
+5. Leave `ADP_KNOWLEDGE_SYNC=false` for the first chat connection. To add synchronization later, configure the separate `BotBizId`, scoped Tencent credentials and supported API region from [the access guide](tencent-access.md#optional-adp-knowledge-synchronization). Keep `ADP_AUTO_PUBLISH=false` initially. Publish uploaded drafts in ADP after reviewing them.
+6. Recreate Clearport with the same Compose files used for deployment so it receives the changed environment. After free usage is confirmed, use **Settings → Check connection** as a manager with fictional data. This makes a real provider request using an approved source; it verifies chat, not knowledge synchronization or COS. A configured status alone is not a successful connection test.
 
 ## Agent instructions
 
@@ -68,9 +70,11 @@ With `ADP_AUTO_PUBLISH=false`, review and publish the uploaded drafts in the ADP
 
 ## Verify with fictional data
 
-1. Import a note into an appropriate skill. Confirm that it remains pending until a manager publishes it in Clearport.
-2. Wait for synchronization and publish the ADP draft. Confirm synchronization reaches its published/synced status.
-3. Ask a question supported by that note. Confirm **Connected AI**, the expected answer and the correct source content. An unknown source ID or an unsupported response should use the explicitly labelled local fallback.
-4. Review a fictional case. Confirm additional findings cite approved sources and each suggestion remains pending for the senior reviewer. The model must not change the document's approval state.
+Run these live steps only after confirming the relevant free allowances and preventing paid overage.
 
-Do not use real customer material until the ADP tenant/model processing locations and access controls are confirmed. A Singapore CVM and an ADP API hostname alone do not prove Singapore-only processing.
+1. Import a note into an appropriate skill. Confirm that it remains pending until a manager publishes it in Clearport.
+2. Ask a question supported by that approved note. For chat alone, Clearport supplies the local source in the prompt. Confirm **Connected AI**, the expected answer and the correct source content. An unknown source ID or an unsupported response should use the explicitly labelled local fallback.
+3. Review a fictional case. Confirm additional findings cite approved sources and each suggestion remains pending for the senior reviewer. The model must not change the document's approval state.
+4. If synchronization is enabled, wait for upload and parsing, review and publish the ADP draft, then confirm Clearport reports it as published/synced. Ask a question that retrieves the document and check its native reference maps to the approved Clearport record. A working chat connection is not evidence that this separate path works.
+
+Do not use real customer material until the ADP tenant/model processing locations and access controls are confirmed. Your Docker host's location and an ADP API hostname alone do not prove Singapore-only processing. The optional private Singapore COS archive is a separate integration and is unnecessary for ADP chat or ADP-managed document uploads.

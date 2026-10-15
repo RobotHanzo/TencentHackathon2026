@@ -5,6 +5,7 @@ import {
   ArrowUp,
   BookOpen,
   ChevronDown,
+  ChevronRight,
   Cpu,
   Leaf,
   LoaderCircle,
@@ -16,6 +17,7 @@ import type { AppState, ChatMessage, Citation } from '../shared/types';
 import { api } from './api';
 import { sourceUrl } from './sources';
 import { useMotionSettings } from './motion';
+import { KnowledgeDetailDialog } from './Knowledge';
 
 type PageProps = {
   state: AppState;
@@ -46,12 +48,32 @@ function CitationDetail({
   citation,
   index,
   state,
+  onOpenSource,
 }: {
   citation: Citation;
   index: number;
   state: AppState;
+  onOpenSource: (id: string) => void;
 }) {
   const source = state.knowledge.find((item) => item.id === citation.id);
+  if (source) {
+    return (
+      <button
+        type="button"
+        className="chat-citation chat-citation-trigger"
+        aria-label={`View ${citation.title}`}
+        aria-haspopup="dialog"
+        onClick={() => onOpenSource(source.id)}
+      >
+        <BookOpen size={14} />
+        <span>
+          <span className="citation-number">{index + 1}</span>
+          {citation.title}
+        </span>
+        <ChevronRight size={14} />
+      </button>
+    );
+  }
   return (
     <details className="chat-citation">
       <summary>
@@ -65,9 +87,9 @@ function CitationDetail({
       <div>
         <p>{citation.excerpt}</p>
         <p className="chat-citation-source">
-          {sourceUrl(citation.sourceName, source?.content ?? citation.excerpt) ? (
+          {sourceUrl(citation.sourceName, citation.excerpt) ? (
             <a
-              href={sourceUrl(citation.sourceName, source?.content ?? citation.excerpt)}
+              href={sourceUrl(citation.sourceName, citation.excerpt)}
               target="_blank"
               rel="noreferrer"
             >
@@ -77,12 +99,6 @@ function CitationDetail({
             citation.sourceName
           )}
         </p>
-        {source && source.content !== citation.excerpt && (
-          <details className="chat-source-full">
-            <summary>Full source</summary>
-            <div>{source.content}</div>
-          </details>
-        )}
       </div>
     </details>
   );
@@ -92,10 +108,12 @@ function Message({
   message,
   state,
   animateIn,
+  onOpenSource,
 }: {
   message: ChatMessage;
   state: AppState;
   animateIn: boolean;
+  onOpenSource: (id: string) => void;
 }) {
   const assistant = message.role === 'assistant';
   const { reveal } = useMotionSettings();
@@ -149,6 +167,7 @@ function Message({
                 citation={citation}
                 index={index}
                 state={state}
+                onOpenSource={onOpenSource}
               />
             ))}
           </div>
@@ -158,7 +177,7 @@ function Message({
   );
 }
 
-export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
+export function ConsultPage({ state, refresh, toast, initialQuery = '' }: PageProps) {
   const { reduced, transition, reveal } = useMotionSettings();
   const initialMessageIds = useRef(new Set(state.chats.map((message) => message.id)));
   const [draft, setDraft] = useState(initialQuery);
@@ -166,6 +185,10 @@ export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const selectedSource = state.knowledge.find((item) => item.id === selectedSourceId);
+  const sourceOpen = useRef(false);
+  sourceOpen.current = Boolean(selectedSource);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inFlight = useRef(false);
@@ -177,7 +200,7 @@ export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
     if (initialQuery) setDraft(initialQuery);
   }, [initialQuery]);
   useEffect(() => {
-    if (hasMessages) {
+    if (hasMessages && !sourceOpen.current) {
       endRef.current?.scrollIntoView({
         behavior:
           reduced || state.chats.length === initialMessageIds.current.size ? 'auto' : 'smooth',
@@ -212,7 +235,9 @@ export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
     } finally {
       setBusy(false);
       inFlight.current = false;
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setTimeout(() => {
+        if (!sourceOpen.current) inputRef.current?.focus();
+      }, 0);
     }
   }
 
@@ -261,6 +286,7 @@ export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
                 key={message.id}
                 message={message}
                 state={state}
+                onOpenSource={setSelectedSourceId}
                 animateIn={
                   message.role === 'assistant' && !initialMessageIds.current.has(message.id)
                 }
@@ -364,6 +390,16 @@ export function ConsultPage({ state, refresh, initialQuery = '' }: PageProps) {
           </p>
         </div>
       </div>
+      {selectedSource && (
+        <KnowledgeDetailDialog
+          key={selectedSource.id}
+          knowledge={selectedSource}
+          state={state}
+          refresh={refresh}
+          toast={toast}
+          onClose={() => setSelectedSourceId(null)}
+        />
+      )}
     </div>
   );
 }

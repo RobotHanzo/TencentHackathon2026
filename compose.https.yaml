@@ -1,0 +1,36 @@
+# Optional HTTPS for a user-managed Linux amd64 Docker host.
+# Use with compose.yaml. Caddy reaches Clearport over Docker's private network.
+services:
+  clearport:
+    environment:
+      APP_COOKIE_SECURE: 'true'
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on:
+      clearport:
+        condition: service_healthy
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      CLEARPORT_DOMAIN: ${CLEARPORT_DOMAIN:?Set CLEARPORT_DOMAIN to your DNS hostname}
+      CLEARPORT_TLS_EMAIL: ${CLEARPORT_TLS_EMAIL:?Set CLEARPORT_TLS_EMAIL for certificate notices}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -188,6 +188,103 @@ function Modal({
   );
 }
 
+export function KnowledgeDetailDialog({
+  knowledge,
+  state,
+  refresh,
+  toast,
+  onClose,
+}: Pick<PageProps, 'state' | 'refresh' | 'toast'> & {
+  knowledge: Knowledge;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function publish(item: Knowledge) {
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/knowledge/${encodeURIComponent(item.id)}/publish`, { method: 'POST' });
+      await refresh();
+      toast('Knowledge approved.');
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : 'Could not approve this source. Please try again.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Knowledge detail" onClose={onClose} busy={busy} wide>
+      <div className="modal-body">
+        <div className="knowledge-detail-meta">
+          <span
+            className={`badge ${knowledge.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}
+          >
+            {knowledge.status === 'Approved' ? 'Approved' : 'Pending approval'}
+          </span>
+          <span className="tag">{knowledge.sourceType}</span>
+          <span className="tag">Singapore</span>
+        </div>
+        <h2>{knowledge.title}</h2>
+        <p className="muted">
+          {state.skills.find((skill) => skill.id === knowledge.skillId)?.name ?? knowledge.category}{' '}
+          · {knowledge.author} · {dateLabel(knowledge.createdAt)}
+        </p>
+        <div className="knowledge-detail-content">{knowledge.content}</div>
+        <div className="knowledge-tags">
+          {knowledge.tags.map((tag) => (
+            <span className="tag" key={tag}>
+              {tag}
+            </span>
+          ))}
+        </div>
+        <div className="knowledge-source">
+          <strong>Source</strong>
+          {sourceUrl(knowledge.sourceName, knowledge.content) ? (
+            <a
+              href={sourceUrl(knowledge.sourceName, knowledge.content)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {knowledge.sourceName} <ExternalLink size={13} />
+            </a>
+          ) : (
+            <span>{knowledge.sourceName}</span>
+          )}
+        </div>
+        {knowledge.status === 'Pending' && (
+          <p className="form-hint">
+            <ShieldCheck size={15} />
+            Manager approval is required before agents use this source.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="inline-error">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="modal-footer">
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
+          Close
+        </button>
+        {knowledge.status === 'Pending' && state.user.role === 'manager' && (
+          <button className="btn btn-primary" disabled={busy} onClick={() => publish(knowledge)}>
+            {busy ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
+            Approve knowledge
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: PageProps) {
   const { reduced, transition } = useMotionSettings();
   const tabIndicatorId = useId();
@@ -198,8 +295,6 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
   const selected = state.knowledge.find((item) => item.id === selectedId);
   useEffect(() => {
     setQuery(initialQuery);
@@ -224,24 +319,6 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
     [state.knowledge, query, tab, category, selectedSkill],
   );
   const activeSkill = state.skills.find((skill) => skill.id === selectedSkill);
-
-  async function publish(item: Knowledge) {
-    setBusy(true);
-    setError('');
-    try {
-      await api(`/knowledge/${encodeURIComponent(item.id)}/publish`, { method: 'POST' });
-      await refresh();
-      toast('Knowledge approved.');
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : 'Could not approve this source. Please try again.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <div className="knowledge-page">
@@ -405,10 +482,7 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
             <button
               className="knowledge-row"
               key={item.id}
-              onClick={() => {
-                setSelectedId(item.id);
-                setError('');
-              }}
+              onClick={() => setSelectedId(item.id)}
               aria-label={`View ${item.title}`}
             >
               <span className="knowledge-title-cell">
@@ -473,73 +547,14 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
       </div>
 
       {selected && (
-        <Modal title="Knowledge detail" onClose={() => setSelectedId(null)} busy={busy} wide>
-          <div className="modal-body">
-            <div className="knowledge-detail-meta">
-              <span
-                className={`badge ${selected.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}
-              >
-                {selected.status === 'Approved' ? 'Approved' : 'Pending approval'}
-              </span>
-              <span className="tag">{selected.sourceType}</span>
-              <span className="tag">Singapore</span>
-            </div>
-            <h2>{selected.title}</h2>
-            <p className="muted">
-              {state.skills.find((skill) => skill.id === selected.skillId)?.name ??
-                selected.category}{' '}
-              · {selected.author} · {dateLabel(selected.createdAt)}
-            </p>
-            <div className="knowledge-detail-content">{selected.content}</div>
-            <div className="knowledge-tags">
-              {selected.tags.map((tag) => (
-                <span className="tag" key={tag}>
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <div className="knowledge-source">
-              <strong>Source</strong>
-              {sourceUrl(selected.sourceName, selected.content) ? (
-                <a
-                  href={sourceUrl(selected.sourceName, selected.content)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {selected.sourceName} <ExternalLink size={13} />
-                </a>
-              ) : (
-                <span>{selected.sourceName}</span>
-              )}
-            </div>
-            {selected.status === 'Pending' && (
-              <p className="form-hint">
-                <ShieldCheck size={15} />
-                Manager approval is required before agents use this source.
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="inline-error">
-                {error}
-              </p>
-            )}
-          </div>
-          <div className="modal-footer">
-            <button
-              className="btn btn-secondary"
-              onClick={() => setSelectedId(null)}
-              disabled={busy}
-            >
-              Close
-            </button>
-            {selected.status === 'Pending' && state.user.role === 'manager' && (
-              <button className="btn btn-primary" disabled={busy} onClick={() => publish(selected)}>
-                {busy ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
-                Approve knowledge
-              </button>
-            )}
-          </div>
-        </Modal>
+        <KnowledgeDetailDialog
+          key={selected.id}
+          knowledge={selected}
+          state={state}
+          refresh={refresh}
+          toast={toast}
+          onClose={() => setSelectedId(null)}
+        />
       )}
       {importOpen && (
         <ImportModal

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function switchUser(page: Page, name: 'Amir Rahman' | 'Sarah Tan') {
   await page.getByRole('button', { name: 'Switch demo user' }).click();
@@ -18,6 +18,35 @@ function singaporeDate(offset: number) {
   return new Date(Date.now() + offset * 86_400_000).toLocaleDateString('en-CA', {
     timeZone: 'Asia/Singapore',
   });
+}
+
+async function selectDocumentText(document: Locator, start: number, end: number) {
+  await document.evaluate(
+    (root, offsets) => {
+      const walker = window.document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const range = window.document.createRange();
+      let position = 0;
+      let started = false;
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const length = node.textContent?.length ?? 0;
+        if (!started && offsets.start < position + length) {
+          range.setStart(node, offsets.start - position);
+          started = true;
+        }
+        if (started && offsets.end <= position + length) {
+          range.setEnd(node, offsets.end - position);
+          break;
+        }
+        position += length;
+      }
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      window.document.dispatchEvent(new Event('selectionchange'));
+    },
+    { start, end },
+  );
 }
 
 test('every workspace page opens and knowledge filters show real source details', async ({
@@ -280,18 +309,43 @@ test('advisor selects relevant knowledge and exposes evidence citations', async 
   await expect(answer).toContainText('Electronics');
   const citation = answer.locator('.chat-citation').first();
   await expect(citation).toBeVisible();
-  await citation.locator('summary').first().click();
-  await expect(citation.locator('p').first()).not.toBeEmpty();
   await expect(page.getByRole('button', { name: 'Send question', exact: true })).toBeDisabled();
   await page.getByRole('combobox', { name: 'Select advisor skill' }).selectOption('food');
-  await page
-    .getByRole('textbox', { name: 'Your question for the advisor' })
-    .fill('Which SFA licensing route applies to fresh produce?');
+  const question = page.getByRole('textbox', { name: 'Your question for the advisor' });
+  const followUp = 'Which SFA licensing route applies to fresh produce?';
+  await question.fill(followUp);
+  await citation.click();
+  const detail = page.getByRole('dialog', { name: 'Knowledge detail' });
+  await expect(detail).toBeVisible();
+  await expect(detail.getByText('Approved', { exact: true })).toBeVisible();
+  const sourceTitle = await detail.locator('.modal-body > h2').innerText();
+  const sourceContent = await detail.locator('.knowledge-detail-content').innerText();
+  expect(sourceContent.length).toBeGreaterThan(0);
+  await expect(page).toHaveURL(/#consult$/);
+  await page.keyboard.press('Escape');
+  await expect(detail).not.toBeVisible();
+  await expect(citation).toBeFocused();
+  await expect(question).toHaveValue(followUp);
+  await expect(page.getByRole('combobox', { name: 'Select advisor skill' })).toHaveValue('food');
+  await citation.press('Enter');
+  await expect(detail).toBeVisible();
+  await detail.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(detail).not.toBeVisible();
   await page.getByRole('textbox', { name: 'Your question for the advisor' }).press('Enter');
   await expect(page.locator('.chat-message.assistant')).toHaveCount(initialAnswers + 2);
   await expect(page.locator('.chat-message.assistant').last()).toContainText(
     'Food & fresh produce',
   );
+  await navigate(page, /^Knowledge base$/);
+  // Reviewer decisions can have the same title; identify the entry by its full content.
+  const entries = page.getByRole('button', { name: `View ${sourceTitle}`, exact: true });
+  await expect(entries.first()).toBeVisible();
+  for (let index = 0; index < (await entries.count()); index++) {
+    await entries.nth(index).click();
+    if ((await detail.locator('.knowledge-detail-content').innerText()) === sourceContent) break;
+    await detail.getByRole('button', { name: 'Close', exact: true }).click();
+  }
+  await expect(detail.locator('.knowledge-detail-content')).toHaveText(sourceContent);
 });
 
 test('mobile navigation, knowledge and dialogs stay within the viewport', async ({
@@ -330,4 +384,157 @@ test('mobile navigation, knowledge and dialogs stay within the viewport', async 
   expect(bounds?.width).toBeLessThanOrEqual(390);
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
+});
+
+test('selected document passages retain comments, overlapping highlights and earlier-version quotes', async ({
+  page,
+}, testInfo) => {
+  const title = 'E2E passage comments';
+  const quote = 'Check permit 🧾';
+  const content = 'Check permit 🧾 before release.\nCheck permit 🧾 before release.';
+  await page.goto('/#reviews');
+  await page.getByRole('button', { name: 'New document', exact: true }).click();
+  const editor = page.getByRole('dialog', { name: 'New document' });
+  await editor.getByLabel('Document title', { exact: true }).fill(title);
+  await editor.getByLabel('Customer', { exact: true }).fill('Passage Test Pte Ltd');
+  await editor.getByLabel('Document content', { exact: true }).fill(content);
+  await editor.getByRole('button', { name: 'Save document' }).click();
+  const detail = page.getByRole('dialog', { name: title, exact: true });
+  const document = detail.getByRole('document', { name: 'Document text' });
+  const secondStart = content.lastIndexOf(quote);
+  await selectDocumentText(document, secondStart, secondStart + quote.length);
+  await detail.getByRole('button', { name: 'Comment on selection', exact: true }).click();
+  const composer = detail.locator('.annotation-composer');
+  const input = composer.getByLabel('Comment on selected text');
+  await expect(input).toBeFocused();
+  await expect(composer.locator('blockquote')).toHaveText(quote);
+  await input.fill('Verify the renewed authorisation.');
+  await detail.getByRole('button', { name: /^Discussion/ }).click();
+  await detail.getByRole('button', { name: 'Document', exact: true }).click();
+  await expect(input).toHaveValue('Verify the renewed authorisation.');
+  await expect(composer.locator('blockquote')).toHaveText(quote);
+
+  // A failed save must leave the passage and typed comment available for retry.
+  await page.route(
+    '**/api/cases/*/comments',
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Temporary comment failure.' }),
+      }),
+    { times: 1 },
+  );
+  await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(composer.getByRole('alert')).toContainText('Temporary comment failure.');
+  await expect(input).toHaveValue('Verify the renewed authorisation.');
+  // Once the POST succeeds, a failed workspace refresh must not offer another POST.
+  await page.route(
+    '**/api/state',
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Temporary refresh failure.' }),
+      }),
+    { times: 1 },
+  );
+  await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(composer).not.toBeVisible();
+  await expect(page.getByRole('status')).toContainText(
+    'Comment saved. Refresh to update the workspace.',
+  );
+  await expect(document.locator('mark')).toHaveText(quote);
+  const actualStart = await document.locator('mark').evaluate((mark) => {
+    const range = window.document.createRange();
+    range.selectNodeContents(mark.parentElement!);
+    range.setEndBefore(mark);
+    return range.toString().length;
+  });
+  expect(actualStart).toBe(secondStart);
+  await expect(document).toHaveText(content);
+
+  // Select across an existing highlight and the adjacent text node.
+  const overlapStart = secondStart + 'Check '.length;
+  await selectDocumentText(document, overlapStart, content.length);
+  await detail.getByRole('button', { name: 'Comment on selection', exact: true }).click();
+  await expect(composer.locator('blockquote')).toHaveText(content.slice(overlapStart));
+  await composer.getByLabel('Comment on selected text').fill('Confirm the release timing too.');
+  await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(composer).not.toBeVisible();
+  await expect(document.locator('mark')).toHaveCount(3);
+  await expect(document).toHaveText(content);
+
+  await detail.getByRole('button', { name: 'Close document' }).click();
+  await page.reload();
+  await page.getByRole('button', { name: new RegExp('^' + title) }).click();
+  await expect(document.locator('mark')).toHaveCount(3);
+  await document.locator('mark').first().press('Enter');
+  const saved = detail.locator('.comment').filter({ hasText: 'Verify the renewed authorisation.' });
+  await expect(saved).toHaveCount(1);
+  await expect(saved.locator('blockquote')).toHaveText(quote);
+  await expect(saved).toBeFocused();
+  await saved.getByRole('button', { name: 'View passage' }).click();
+  await expect(document.locator('mark').first()).toBeFocused();
+
+  await detail.getByRole('button', { name: 'Edit document' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit document', exact: true });
+  await edit
+    .getByRole('textbox', { name: 'Document content', exact: true })
+    .fill('Revised: ' + content);
+  await edit.getByRole('button', { name: 'Save document' }).click();
+  await expect(document.locator('mark')).toHaveCount(0);
+  await detail.getByRole('button', { name: /^Discussion/ }).click();
+  await expect(saved.locator('blockquote')).toHaveText(quote);
+  await expect(saved.getByText('Earlier version', { exact: true })).toBeVisible();
+  await expect(saved.getByRole('button', { name: 'View passage' })).toHaveCount(0);
+
+  // A concurrent edit rejects the old selection but retains the draft for reselection.
+  await detail.getByRole('button', { name: 'Document', exact: true }).click();
+  const revised = 'Revised: ' + content;
+  await selectDocumentText(
+    document,
+    revised.lastIndexOf(quote),
+    revised.lastIndexOf(quote) + quote.length,
+  );
+  await detail.getByRole('button', { name: 'Comment on selection', exact: true }).click();
+  await input.fill('Keep this draft after another reviewer edits the text.');
+  const latest = 'Latest: ' + revised;
+  await page.evaluate(
+    async ({ title, content }) => {
+      const stateResponse = await fetch('/api/state');
+      const state = await stateResponse.json();
+      const record = state.cases.find((item: { title: string }) => item.title === title);
+      const response = await fetch('/api/cases/' + record.id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...record, content }),
+      });
+      if (!response.ok) throw new Error('Concurrent edit failed');
+    },
+    { title, content: latest },
+  );
+  await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(
+    composer.getByText('Document changed. Select the passage again.', { exact: true }),
+  ).toBeVisible();
+  await expect(input).toHaveValue('Keep this draft after another reviewer edits the text.');
+  await expect(composer.getByRole('button', { name: 'Post comment', exact: true })).toBeDisabled();
+  await selectDocumentText(
+    document,
+    latest.lastIndexOf(quote),
+    latest.lastIndexOf(quote) + quote.length,
+  );
+  await detail.getByRole('button', { name: 'Use selected text', exact: true }).click();
+  await expect(input).toHaveValue('Keep this draft after another reviewer edits the text.');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await composer.scrollIntoViewIfNeeded();
+  expect((await detail.boundingBox())!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: testInfo.outputPath('text-comment-mobile.png'),
+    animations: 'disabled',
+  });
+  await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
+  await expect(composer).not.toBeVisible();
+  await expect(document.locator('mark')).toHaveText(quote);
 });
