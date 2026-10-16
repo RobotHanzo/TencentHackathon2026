@@ -1,0 +1,8 @@
+# Build on the deployment host to use its native Linux CPU architecture.
+# Use with compose.yaml; this image is local and is never pulled from a registry.
+services:
+  instill:
+    image: instill:local
+    build:
+      context: .
+    pull_policy: never

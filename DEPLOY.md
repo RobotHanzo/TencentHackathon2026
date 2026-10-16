@@ -2,7 +2,7 @@
 
 You operate the Docker host, domain, HTTPS and backups. Tencent supplies the optional ADP agent, knowledge synchronization and Singapore COS archive. **No Tencent CVM or provisioning credentials are required.**
 
-The GitHub workflow publishes a tested Linux amd64 image to GHCR. You choose when to pull and run it. This remains a single-instance, single-operator prototype with SQLite; see the [access limits](README.md#access-governance-and-deployment-limits).
+The GitHub workflow builds and tests Linux amd64 and arm64 images on native runners, then publishes both under shared multi-platform tags to GHCR. You choose when to pull and run them. This remains a single-instance, single-operator prototype with SQLite; see the [access limits](README.md#access-governance-and-deployment-limits).
 
 ## Deployment layout
 
@@ -23,7 +23,7 @@ Instill keeps the authoritative cases, knowledge, comments and approval decision
 
 ## 1. Prepare your host
 
-Use a **Linux amd64** Docker host with Docker Engine and the Compose plugin. The published image targets amd64. Choose a host location appropriate for your data; the application's Singapore use case does not dictate its hosting provider.
+Use a **Linux amd64 or arm64** Docker host with Docker Engine and the Compose plugin. Docker selects the matching architecture from a multi-platform image tag. Choose a host location appropriate for your data; the application's Singapore use case does not dictate its hosting provider.
 
 Copy these files into one directory on your host, or check out the repository:
 
@@ -86,7 +86,7 @@ Your Tencent spending limit remains **$0**. Self-hosting removes the CVM require
 
 For this repository, the registry is `ghcr.io/robothanzo/tencenthackathon2026`. Forks use their own lowercase owner/repository path.
 
-The [GitHub workflow](.github/workflows/docker.yml) builds and tests the application and container, then publishes the **same tested image**:
+The [GitHub workflow](.github/workflows/docker.yml) builds and tests the application and container separately on native amd64 and arm64 runners, then publishes the **same tested images** under shared multi-platform tags. Both architectures must pass before publication; the publish job combines their manifests without rebuilding:
 
 | Trigger                | Result                                                        |
 | ---------------------- | ------------------------------------------------------------- |
@@ -96,6 +96,12 @@ The [GitHub workflow](.github/workflows/docker.yml) builds and tests the applica
 | Manual dispatch        | Validate the selected ref; publish only `main` or a `v*` tag. |
 
 The workflow uses GitHub's `GITHUB_TOKEN` with `packages: write`. It does not need Tencent credentials or SSH access and does not restart your host. Local uncommitted changes are not included in an existing registry image.
+
+Choose a tag published after multi-platform support was added. Existing SHA tags, including `sha-52c336c478a85940f52c5637d7e652ea5cc3579d`, remain amd64-only. After a successful new publish, update `CLEARPORT_IMAGE` (or `INSTILL_IMAGE` if set) to that new full SHA tag. You can inspect available platforms without starting a container:
+
+```sh
+docker buildx imagetools inspect ghcr.io/robothanzo/tencenthackathon2026:sha-<new-full-commit-SHA>
+```
 
 For a private package, log in with an account that can read it and a personal access token (classic) with `read:packages`. Supply the token through standard input; keep it separate from `.env.deploy`. See [GitHub's container registry guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
@@ -107,13 +113,39 @@ printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdi
 unset GHCR_TOKEN
 ```
 
-Alternatively, build your current checkout on a Linux amd64 Docker host:
+Alternatively, build your current checkout on a Linux amd64 or arm64 Docker host. The build uses the host's native architecture:
 
 ```sh
 docker build -t instill:local .
 ```
 
 Set `CLEARPORT_IMAGE=instill:local`, skip the image pull, and use `up -d --wait --pull never` for base Compose. With the Caddy overlay, first pull its image separately using `docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml pull caddy`.
+
+### Recover from `exec docker-entrypoint.sh failed: Exec format error`
+
+This failure happens before the application starts. The startup script comes from the official Node base image. An old amd64-only image on an arm64 host can cause this error. Check the Docker server architecture with `docker info --format '{{.OSType}}/{{.Architecture}}'` and use a newly published multi-platform tag, or build locally below.
+
+To replace the failing image, build the current checkout **on the deployment host**. The native build overlay uses a separate local image and supports Linux amd64 or arm64 without changing `.env.deploy`:
+
+```sh
+docker compose --env-file .env.deploy -f compose.yaml -f compose.build.yaml build --pull instill
+docker compose --env-file .env.deploy -f compose.yaml -f compose.build.yaml up -d --wait --force-recreate instill
+```
+
+Keep `-f compose.build.yaml` in subsequent commands while using that local image. For the supplied HTTPS proxy, also include `-f compose.https.yaml` in both commands and start the whole stack by omitting the final `instill` argument from `up`. The preflight accepts both amd64 and arm64 Docker hosts.
+
+The base configuration accepts both `INSTILL_IMAGE` / `INSTILL_PORT` and the existing `CLEARPORT_IMAGE` / `CLEARPORT_PORT`; the `INSTILL_*` values take precedence when nonempty. The build overlay always selects `instill:local` and never pulls that application image from a registry.
+
+### Build an ARM64 image on another machine
+
+With a Buildx builder that supports ARM64 (Docker Desktop includes emulation), build and export an image for transfer to the server:
+
+```sh
+docker buildx build --platform linux/arm64 --pull --load -t instill:arm64 .
+docker save instill:arm64 | gzip > instill-arm64.tar.gz
+```
+
+Copy the archive to the server and run `docker load --input instill-arm64.tar.gz`. Set `INSTILL_IMAGE=instill:arm64` in the server's `.env.deploy`, then run `docker compose --env-file .env.deploy up -d --wait --pull never`. Keep your usual HTTPS overlay arguments if applicable. Use base Compose for this transferred image; the build overlay selects `instill:local` instead.
 
 ## 4. Start the containers
 
@@ -137,7 +169,7 @@ Open `https://YOUR_DOMAIN`. The overlay forces secure cookies, preserves the ori
 
 ### Your existing HTTPS proxy
 
-Use base `compose.yaml` and set `APP_COOKIE_SECURE=true`. A proxy on the same host can forward to `http://127.0.0.1:3001`; preserve the original Host header and permit an 11 MB request body. A proxy in another container must share a private Docker network with Instill and forward to `clearport:3001`; its own loopback address does not reach Instill. Configure that shared network in your own Compose overlay.
+Use base `compose.yaml` and set `APP_COOKIE_SECURE=true`. A proxy on the same host can forward to `http://127.0.0.1:3001`; preserve the original Host header and permit an 11 MB request body. A proxy in another container must share a private Docker network with Instill and forward to `instill:3001`; its own loopback address does not reach Instill. Configure that shared network in your own Compose overlay.
 
 ```sh
 docker compose --env-file .env.deploy config --quiet
@@ -171,7 +203,7 @@ Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own c
 4. Import fictional knowledge, approve it, review a fictional case, and inspect advice and citations.
 5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success.
 
-The first run seeds fictional Singapore records. Data persists in the `clearport_data` volume at `/app/data/clearport.db`. Keep one app instance and the same Compose project name (`clearport`) when updating. The existing `clearport` service, volume, database filename and `CLEARPORT_*` deployment variables are retained for compatibility. The login username is `instill`; the previous `clearport` username remains accepted with the same password.
+The first run seeds fictional Singapore records. The current Compose project and service are named `instill`; data persists in the `instill_data` volume at `/app/data/instill.db`. Keep one app instance and the same project name, volume mapping and database path when updating. Earlier Clearport volumes are not automatically migrated by the rename. Existing `CLEARPORT_*` deployment variables remain supported. The login username is `instill`; the previous `clearport` username remains accepted with the same password.
 
 Use `config --quiet` for validation: plain `config` prints interpolated secrets. Review container logs privately before sharing them.
 
@@ -182,9 +214,9 @@ The following commands use base Compose. If using Caddy, add `-f compose.yaml -f
 Stop the app while copying the entire data directory. Replace the backup name with a new timestamp:
 
 ```sh
-docker compose --env-file .env.deploy stop clearport
-docker compose --env-file .env.deploy cp clearport:/app/data/. ./clearport-backup-YYYYMMDD-HHMMSS
-docker compose --env-file .env.deploy start --wait clearport
+docker compose --env-file .env.deploy stop instill
+docker compose --env-file .env.deploy cp instill:/app/data/. ./clearport-backup-YYYYMMDD-HHMMSS
+docker compose --env-file .env.deploy start --wait instill
 ```
 
 Preserve any SQLite WAL/SHM files with their matching database and keep the completed backup outside the host. With Caddy, also retain its `caddy_data` and `caddy_config` volumes. Original-file COS archival does not cover these volumes. See [SQLite backup guidance](https://www.sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active).

@@ -1,6 +1,6 @@
 # Tencent integrations on your Docker host
 
-You operate Instill's containers, HTTPS and persistent data on your chosen Linux amd64 host. Tencent supplies optional ADP chat, ADP knowledge synchronization and a private COS archive. Follow [DEPLOY.md](../DEPLOY.md) for the host; no Tencent CVM or infrastructure-provisioning credentials are required.
+You operate Instill's containers, HTTPS and persistent data on your chosen Linux amd64 or arm64 host. Tencent supplies optional ADP chat, ADP knowledge synchronization and a private COS archive. Follow [DEPLOY.md](../DEPLOY.md) for the host; no Tencent CVM or infrastructure-provisioning credentials are required.
 
 ## Start with external services disabled
 

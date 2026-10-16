@@ -17,9 +17,17 @@ concurrency:
 
 jobs:
   verify:
-    name: Test app and container
-    runs-on: ubuntu-latest
+    name: Test app and container (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -42,6 +50,7 @@ jobs:
       - name: Validate self-hosted HTTPS and legacy configuration
         run: |
           bash -n deploy/preflight.sh
+          docker compose -f compose.yaml -f compose.build.yaml config --quiet
           docker compose -f compose.yaml -f compose.https.yaml config --quiet
           docker compose -f compose.yaml -f compose.tencent.yaml config --quiet
         env:
@@ -54,32 +63,41 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           load: true
-          tags: instill:smoke
+          tags: instill:smoke-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.title=Instill
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=instill-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=instill-${{ matrix.arch }}
+      - name: Verify image architecture
+        env:
+          SMOKE_IMAGE: instill:smoke-${{ matrix.arch }}
+          EXPECTED_PLATFORM: linux/${{ matrix.arch }}
+        run: test "$(docker image inspect "$SMOKE_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = "$EXPECTED_PLATFORM"
       - name: Test container startup, authentication and persistence
-        run: node scripts/smoke-container.mjs instill:smoke
+        env:
+          SMOKE_IMAGE: instill:smoke-${{ matrix.arch }}
+        run: node scripts/smoke-container.mjs "$SMOKE_IMAGE"
       - name: Save the tested image
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-        run: docker save instill:smoke | gzip > "$RUNNER_TEMP/instill-image.tar.gz"
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: docker save "instill:smoke-$ARCH" | gzip > "$RUNNER_TEMP/instill-image-$ARCH.tar.gz"
       - name: Transfer tested image to publishing job
         if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: instill-image
-          path: ${{ runner.temp }}/instill-image.tar.gz
+          name: instill-image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/instill-image-${{ matrix.arch }}.tar.gz
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
 
   publish:
-    name: Publish tested image to GHCR
+    name: Publish tested multi-platform image to GHCR
     needs: verify
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
@@ -88,13 +106,20 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Download tested image
+      - name: Download tested images
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: instill-image
+          pattern: instill-image-*
+          merge-multiple: true
           path: ${{ runner.temp }}
-      - name: Load tested image
-        run: gzip -dc "$RUNNER_TEMP/instill-image.tar.gz" | docker load
+      - name: Load tested images
+        run: |
+          for arch in amd64 arm64; do
+            gzip -dc "$RUNNER_TEMP/instill-image-$arch.tar.gz" | docker load
+            test "$(docker image inspect "instill:smoke-$arch" --format '{{.Os}}/{{.Architecture}}')" = "linux/$arch"
+          done
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Set lowercase registry path
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
@@ -114,12 +139,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish the exact image that passed the checks
+      - name: Publish the exact images that passed the checks
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
         run: |
+          sources=()
+          for arch in amd64 arm64; do
+            image="$IMAGE_NAME:sha-$GITHUB_SHA-$arch"
+            docker tag "instill:smoke-$arch" "$image"
+            docker push "$image"
+            sources+=("$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')")
+          done
           while IFS= read -r tag; do
-            docker tag instill:smoke "$tag"
-            docker push "$tag"
+            [[ -n "$tag" ]] || continue
+            docker buildx imagetools create --tag "$tag" "${sources[@]}"
+            docker buildx imagetools inspect "$tag" --raw | jq -e '
+              [.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'
             echo "Published: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
           done <<< "$IMAGE_TAGS"

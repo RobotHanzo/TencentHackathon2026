@@ -26,10 +26,13 @@ fi
 command -v docker >/dev/null || { printf '%s\n' 'Docker is not installed.' >&2; exit 1; }
 docker compose version >/dev/null
 docker_platform="$(docker info --format '{{.OSType}}/{{.Architecture}}')"
-if [[ "$docker_platform" != "linux/x86_64" && "$docker_platform" != "linux/amd64" ]]; then
-  printf '%s\n' 'The published image requires a Linux amd64 Docker host.' >&2
-  exit 1
-fi
+case "$docker_platform" in
+  linux/x86_64|linux/amd64|linux/aarch64|linux/arm64) ;;
+  *)
+    printf '%s\n' 'The published image requires a Linux amd64 or arm64 Docker host.' >&2
+    exit 1
+    ;;
+esac
 
 compose=(docker compose --env-file .env.deploy -f compose.yaml)
 if [[ "$mode" == "https" ]]; then

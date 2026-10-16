@@ -1,19 +1,19 @@
-name: clearport
+name: instill
 
 services:
-  clearport:
-    image: ${CLEARPORT_IMAGE:-ghcr.io/robothanzo/tencenthackathon2026:main}
+  instill:
+    image: ${INSTILL_IMAGE:-${CLEARPORT_IMAGE:-ghcr.io/robothanzo/tencenthackathon2026:main}}
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
     ports:
-      - '127.0.0.1:${CLEARPORT_PORT:-3001}:3001'
+      - '127.0.0.1:${INSTILL_PORT:-${CLEARPORT_PORT:-3001}}:3001'
     environment:
       NODE_ENV: production
       DEMO_MODE: 'false'
       HOST: 0.0.0.0
       PORT: '3001'
-      DATA_PATH: /app/data/clearport.db
+      DATA_PATH: /app/data/instill.db
       APP_ACCESS_PASSWORD: ${APP_ACCESS_PASSWORD:?Set APP_ACCESS_PASSWORD in .env.deploy (at least 12 characters)}
       APP_USER_ID: ${APP_USER_ID:-manager-sarah}
       APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-false}
@@ -33,7 +33,7 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
     volumes:
-      - clearport_data:/app/data
+      - instill_data:/app/data
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
@@ -43,4 +43,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  clearport_data:
+  instill_data:

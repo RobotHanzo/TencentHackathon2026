@@ -1,7 +1,7 @@
-# Optional HTTPS for a user-managed Linux amd64 Docker host.
+# Optional HTTPS for a user-managed Linux amd64 or arm64 Docker host.
 # Use with compose.yaml. Caddy reaches Instill over Docker's private network.
 services:
-  clearport:
+  instill:
     environment:
       APP_COOKIE_SECURE: 'true'
 
@@ -9,7 +9,7 @@ services:
     image: caddy:2.11.7-alpine
     restart: unless-stopped
     depends_on:
-      clearport:
+      instill:
         condition: service_healthy
     ports:
       - '80:80'
