@@ -217,6 +217,25 @@ async function main() {
   assert.equal((await request(base, `${assetUrl.pathname}${assetUrl.search}`)).status, 200);
   console.log('PASS built page and JavaScript asset');
 
+  let accessLines = '';
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const logs = docker(['logs', first]);
+    accessLines = `${logs.stdout}\n${logs.stderr}`;
+    if (accessLines.includes(`"GET ${assetUrl.pathname}" 200 `)) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  assert.match(accessLines, / "GET \/" 200 \d+ \d+\.\dms "/, 'docker logs must show page requests.');
+  assert.ok(
+    accessLines.includes(`"GET ${assetUrl.pathname}" 200 `),
+    'docker logs must show asset requests.',
+  );
+  assert.doesNotMatch(
+    accessLines,
+    / (?:127\.0\.0\.1|::1|::ffff:127\.0\.0\.1) "GET \/api\/health"/,
+    'The in-container healthcheck must not fill the access log.',
+  );
+  console.log('PASS access log lines in docker logs');
+
   assert.equal((await request(base, '/api/state')).status, 401);
   const stateResponse = await request(base, '/api/state', { auth: true });
   assert.equal(stateResponse.status, 200);

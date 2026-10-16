@@ -51,6 +51,7 @@ For a login-free demo, set `DEMO_MODE=true` in `.env.deploy`; `APP_ACCESS_PASSWO
 | `CLEARPORT_PORT`      | Host loopback port; default `3001`.                                             |
 | `DEMO_MODE`           | `false` by default; `true` skips login and enables demo persona switching.       |
 | `APP_ACCESS_PASSWORD` | Required unless `DEMO_MODE=true`; at least 12 characters outside demo mode.       |
+| `ACCESS_LOG`          | `true` by default; `false` stops the per-request lines in `docker logs`.         |
 | `APP_COOKIE_SECURE`   | `true` for HTTPS; `false` only for localhost or an SSH tunnel over HTTP.        |
 | `CLEARPORT_DOMAIN`    | Hostname without a scheme, path or port; required for the supplied HTTPS proxy. |
 | `CLEARPORT_TLS_EMAIL` | Certificate contact email for that proxy.                                       |
@@ -209,6 +210,14 @@ Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own c
 The first run seeds fictional Singapore records. The current Compose project and service are named `instill`; data persists in the `instill_data` volume at `/app/data/instill.db`. Keep one app instance and the same project name, volume mapping and database path when updating. Earlier Clearport volumes are not automatically migrated by the rename. Existing `CLEARPORT_*` deployment variables remain supported. The login username is `instill`; the previous `clearport` username remains accepted with the same password.
 
 Use `config --quiet` for validation: plain `config` prints interpolated secrets. Review container logs privately before sharing them.
+
+Every page, asset and API request is logged, so `docker compose logs -f instill` shows who is visiting:
+
+```text
+2026-10-23T08:15:30.123Z 172.18.0.1 "GET /api/state" 200 1432 3.2ms "Mozilla/5.0 …" xff="203.0.113.9"
+```
+
+The fields are time, socket address, request line, status (`aborted` if the client disconnected early), response bytes, duration and user agent. Query strings are never logged. Behind the supplied HTTPS proxy the socket address is the proxy's private address; the visitor's address appears as `xff`. That value comes from the proxy, so treat it as trustworthy only when all traffic passes through the proxy. The container's own healthcheck is omitted. The log driver keeps at most three 10 MB files for the app container.
 
 ## Backup, update and rollback
 

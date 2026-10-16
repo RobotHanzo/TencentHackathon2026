@@ -20,6 +20,7 @@ import { answerQuestion, liveConfigured, reviewCase, type AIConfig } from './adv
 import { KnowledgeSync, type KnowledgeClient } from './knowledge-sync.ts';
 import { TencentKnowledgeClient } from './tencent-knowledge.ts';
 import { OriginalStorage } from './object-storage.ts';
+import { accessLog } from './access-log.ts';
 
 const categories: Category[] = ['Electronics', 'Food & produce', 'Automotive', 'General cargo'];
 class ApiError extends Error {
@@ -115,6 +116,7 @@ export interface AppOptions {
   cookieSecure?: boolean;
   knowledge?: { client: KnowledgeClient; target: string; autoPublish?: boolean; start?: boolean };
   originals?: Pick<OriginalStorage, 'put'>;
+  accessLog?: (line: string) => void;
 }
 
 async function extractFile(file: Express.Multer.File): Promise<string> {
@@ -261,6 +263,7 @@ export function createApp(options: AppOptions = {}) {
     limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 8, fieldSize: 300_000 },
   });
   app.disable('x-powered-by');
+  if (options.accessLog) app.use(accessLog(options.accessLog, now));
   app.use(express.json({ limit: '300kb' }));
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
