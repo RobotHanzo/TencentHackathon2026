@@ -5,11 +5,11 @@ import { spawnSync } from 'node:child_process';
 // Uses only resources bearing this run's unique ownership label. No pruning.
 const image = process.argv[2];
 const runId = randomUUID();
-const prefix = `clearport-smoke-${runId}`;
+const prefix = `instill-smoke-${runId}`;
 const volume = `${prefix}-data`;
-const ownershipLabel = 'clearport.smoke-run';
+const ownershipLabel = 'instill.smoke-run';
 const password = randomBytes(32).toString('hex');
-const basicToken = Buffer.from(`clearport:${password}`).toString('base64');
+const basicToken = Buffer.from(`instill:${password}`).toString('base64');
 const containers = new Set();
 const deadline = Date.now() + 50_000;
 let volumeCreated = false;
@@ -209,7 +209,7 @@ async function main() {
   const page = await request(base, '/');
   assert.equal(page.status, 200);
   const html = await page.text();
-  assert.match(html, /clearport/i);
+  assert.match(html, /instill/i);
   const asset = html.match(/<script\b[^>]*\bsrc=["']([^"']+)["']/i)?.[1];
   assert.ok(asset, 'Built page must reference a JavaScript asset.');
   const assetUrl = new URL(asset, base);

@@ -120,7 +120,7 @@ export function seedWorkspace(now: Date): Workspace {
       'Verify the date, not just the permit number',
       'general',
       'INTERNAL DEMO SOP, not a statement of legislation: Where permit or licence validity is relevant, compare the recorded expiry against both today in Singapore and the planned shipment date. A populated number alone is insufficient evidence. Ask for corrected evidence if validity is missing or expired.',
-      'Clearport internal SOP · Permit validity',
+      'Instill internal SOP · Permit validity',
       ['permit', 'expiry', 'licence', 'dates'],
     ),
     entry(
@@ -128,7 +128,7 @@ export function seedWorkspace(now: Date): Workspace {
       'Confirm receiving and storage readiness',
       'food',
       'INTERNAL DEMO SOP: Confirm the receiving warehouse and any agreed cold-chain or handling arrangements before promising delivery for fresh produce. Record who confirmed the arrangement. This is an operational checklist, not an assertion that all food requires a particular warehouse licence.',
-      'Clearport internal SOP · Receiving arrangements',
+      'Instill internal SOP · Receiving arrangements',
       ['warehouse', 'cold chain', 'delivery'],
     ),
     entry(
@@ -136,7 +136,7 @@ export function seedWorkspace(now: Date): Workspace {
       'Vehicle accessories may cross product categories',
       'automotive',
       'INTERNAL DEMO SOP: For automotive remote controls, Bluetooth modules or radio accessories, inspect the technical specifications and consult the electronics skill for potential IMDA checks. Confirm the applicable HS classification from product facts; do not copy a previous classification blindly.',
-      'Clearport internal SOP · Automotive accessories',
+      'Instill internal SOP · Automotive accessories',
       ['automotive', 'remote control', 'Bluetooth', 'IMDA'],
     ),
     entry(
@@ -144,7 +144,7 @@ export function seedWorkspace(now: Date): Workspace {
       'Separate planned clearance from confirmed clearance',
       'general',
       'INTERNAL DEMO SOP: Before sending a customer email, check invoice, packing list and shipment facts. Do not state that clearance is guaranteed or completed without evidence. Use conditional timing and explain outstanding documents. Senior approval is an internal approval; it does not submit a declaration or send an email.',
-      'Clearport internal SOP · Customer communications',
+      'Instill internal SOP · Customer communications',
       ['customer email', 'invoice', 'packing list', 'clearance'],
     ),
     {
@@ -289,7 +289,7 @@ export function seedWorkspace(now: Date): Workspace {
       type: 'review',
       title: 'Wireless sensor declaration reviewed',
       detail: 'The local advisor flagged permit validity and telecoms scope for senior review.',
-      actor: 'Clearport advisor',
+      actor: 'Instill advisor',
       createdAt: date,
       caseId: 'case-wireless',
     },

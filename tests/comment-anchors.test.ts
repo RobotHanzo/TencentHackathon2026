@@ -55,7 +55,7 @@ async function application(dbPath = ':memory:') {
 }
 
 test('Anchored comments preserve exact repeated-text offsets and Unicode selections across restart', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'clearport-comment-anchors-'));
+  const directory = mkdtempSync(join(tmpdir(), 'instill-comment-anchors-'));
   let app: Awaited<ReturnType<typeof application>> | undefined;
   try {
     const dbPath = join(directory, 'comments.db');
@@ -121,7 +121,7 @@ test('Anchored comments preserve exact repeated-text offsets and Unicode selecti
   } finally {
     await app?.close();
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
-    assert.ok(directory.includes('clearport-comment-anchors-'));
+    assert.ok(directory.includes('instill-comment-anchors-'));
     rmSync(directory, { recursive: true, force: true });
   }
 });

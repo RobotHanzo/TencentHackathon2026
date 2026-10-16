@@ -1,4 +1,4 @@
-# Deploy Clearport
+# Deploy Instill
 
 You operate the Docker host, domain, HTTPS and backups. Tencent supplies the optional ADP agent, knowledge synchronization and Singapore COS archive. **No Tencent CVM or provisioning credentials are required.**
 
@@ -10,7 +10,7 @@ The GitHub workflow publishes a tested Linux amd64 image to GHCR. You choose whe
 flowchart LR
     Browser[Employee / reviewer] -->|HTTPS| Proxy
     subgraph Host["Your Docker host"]
-        Proxy[Caddy or your reverse proxy] --> App[Clearport: UI + API]
+        Proxy[Caddy or your reverse proxy] --> App[Instill: UI + API]
         App --> DB[(SQLite volume)]
     end
     GHCR[GitHub Container Registry] -->|image pull| Host
@@ -19,7 +19,7 @@ flowchart LR
     App -. optional: original uploads .-> COS[Private Singapore COS]
 ```
 
-Clearport keeps the authoritative cases, knowledge, comments and approval decisions in SQLite. ADP provides advice; people approve documents in Clearport. Tencent connections originate from the backend over HTTPS; ADP does not need an inbound callback to your host.
+Instill keeps the authoritative cases, knowledge, comments and approval decisions in SQLite. ADP provides advice; people approve documents in Instill. Tencent connections originate from the backend over HTTPS; ADP does not need an inbound callback to your host.
 
 ## 1. Prepare your host
 
@@ -41,7 +41,7 @@ chmod 600 .env.deploy
 nano .env.deploy
 ```
 
-Set `APP_ACCESS_PASSWORD` to a unique value of at least 12 characters. The login username is **clearport**. `APP_USER_ID` defaults to the seeded manager `manager-sarah`; it does not create a new identity. Quote values containing `$` with single quotes in the environment file to prevent Compose interpolation.
+Set `APP_ACCESS_PASSWORD` to a unique value of at least 12 characters. The login username is **instill**. `APP_USER_ID` defaults to the seeded manager `manager-sarah`; it does not create a new identity. Quote values containing `$` with single quotes in the environment file to prevent Compose interpolation.
 
 | Setting               | Purpose                                                                         |
 | --------------------- | ------------------------------------------------------------------------------- |
@@ -110,10 +110,10 @@ unset GHCR_TOKEN
 Alternatively, build your current checkout on a Linux amd64 Docker host:
 
 ```sh
-docker build -t clearport:local .
+docker build -t instill:local .
 ```
 
-Set `CLEARPORT_IMAGE=clearport:local`, skip the image pull, and use `up -d --wait --pull never` for base Compose. With the Caddy overlay, first pull its image separately using `docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml pull caddy`.
+Set `CLEARPORT_IMAGE=instill:local`, skip the image pull, and use `up -d --wait --pull never` for base Compose. With the Caddy overlay, first pull its image separately using `docker compose --env-file .env.deploy -f compose.yaml -f compose.https.yaml pull caddy`.
 
 ## 4. Start the containers
 
@@ -137,7 +137,7 @@ Open `https://YOUR_DOMAIN`. The overlay forces secure cookies, preserves the ori
 
 ### Your existing HTTPS proxy
 
-Use base `compose.yaml` and set `APP_COOKIE_SECURE=true`. A proxy on the same host can forward to `http://127.0.0.1:3001`; preserve the original Host header and permit an 11 MB request body. A proxy in another container must share a private Docker network with Clearport and forward to `clearport:3001`; its own loopback address does not reach Clearport. Configure that shared network in your own Compose overlay.
+Use base `compose.yaml` and set `APP_COOKIE_SECURE=true`. A proxy on the same host can forward to `http://127.0.0.1:3001`; preserve the original Host header and permit an 11 MB request body. A proxy in another container must share a private Docker network with Instill and forward to `clearport:3001`; its own loopback address does not reach Instill. Configure that shared network in your own Compose overlay.
 
 ```sh
 docker compose --env-file .env.deploy config --quiet
@@ -166,12 +166,12 @@ Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own c
 ## 5. Verify
 
 1. Request `/api/health` on the deployed site. It should report `ok: true`; this checks the app, not provider entitlement.
-2. Confirm unauthenticated `/api/state` returns 401, then sign in as `clearport` with your application password.
+2. Confirm unauthenticated `/api/state` returns 401, then sign in as `instill` with your application password.
 3. With HTTPS, confirm the session cookie has `Secure`, `HttpOnly` and `SameSite=Strict`.
 4. Import fictional knowledge, approve it, review a fictional case, and inspect advice and citations.
 5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success.
 
-The first run seeds fictional Singapore records. Data persists in the `clearport_data` volume at `/app/data/clearport.db`. Keep one app instance and the same Compose project name (`clearport`) when updating.
+The first run seeds fictional Singapore records. Data persists in the `clearport_data` volume at `/app/data/clearport.db`. Keep one app instance and the same Compose project name (`clearport`) when updating. The existing `clearport` service, volume, database filename and `CLEARPORT_*` deployment variables are retained for compatibility. The login username is `instill`; the previous `clearport` username remains accepted with the same password.
 
 Use `config --quiet` for validation: plain `config` prints interpolated secrets. Review container logs privately before sharing them.
 

@@ -1,5 +1,5 @@
 # Optional HTTPS for a user-managed Linux amd64 Docker host.
-# Use with compose.yaml. Caddy reaches Clearport over Docker's private network.
+# Use with compose.yaml. Caddy reaches Instill over Docker's private network.
 services:
   clearport:
     environment:

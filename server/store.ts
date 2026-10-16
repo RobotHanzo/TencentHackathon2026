@@ -32,7 +32,21 @@ export class Store {
     const row = this.db.prepare('SELECT payload FROM workspace WHERE id = 1').get() as {
       payload: string;
     };
-    return JSON.parse(row.payload) as Workspace;
+    const workspace = JSON.parse(row.payload) as Workspace;
+    // Refresh built-in branding in existing workspaces without changing authored content or IDs.
+    const rebrandSource = (sourceName: string) =>
+      sourceName.replace(/^Clearport internal SOP · /, 'Instill internal SOP · ');
+    for (const item of workspace.knowledge) item.sourceName = rebrandSource(item.sourceName);
+    for (const item of workspace.cases)
+      for (const suggestion of item.review?.suggestions ?? [])
+        for (const citation of suggestion.citations)
+          citation.sourceName = rebrandSource(citation.sourceName);
+    for (const message of workspace.chats)
+      for (const citation of message.citations)
+        citation.sourceName = rebrandSource(citation.sourceName);
+    for (const item of workspace.activity)
+      if (item.actor === 'Clearport advisor') item.actor = 'Instill advisor';
+    return workspace;
   }
   mutate<T>(change: (workspace: Workspace) => T): T {
     this.db.exec('BEGIN IMMEDIATE');

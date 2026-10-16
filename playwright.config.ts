@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Each invocation uses its own workspace. Never reuse a developer's running API.
-const databasePath = join(mkdtempSync(join(tmpdir(), 'clearport-browser-')), 'workspace.db');
+const databasePath = join(mkdtempSync(join(tmpdir(), 'instill-browser-')), 'workspace.db');
 
 export default defineConfig({
   testDir: './tests',
@@ -47,7 +47,7 @@ export default defineConfig({
     {
       command: 'npm run dev:client -- --port 5174',
       url: 'http://127.0.0.1:5174',
-      env: { CLEARPORT_API_TARGET: 'http://127.0.0.1:3101' },
+      env: { INSTILL_API_TARGET: 'http://127.0.0.1:3101' },
       reuseExistingServer: false,
       timeout: 30_000,
     },

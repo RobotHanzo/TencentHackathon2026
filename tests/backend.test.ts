@@ -23,7 +23,7 @@ const input: CaseInput = {
 };
 
 test('persistent approval loop, permissions, import isolation, and decision retrieval', async () => {
-  const folder = mkdtempSync(join(tmpdir(), 'clearport-api-'));
+  const folder = mkdtempSync(join(tmpdir(), 'instill-api-'));
   const dbPath = join(folder, 'test.db');
   const service = createApp({
     dbPath,
@@ -175,7 +175,7 @@ test('persistent approval loop, permissions, import isolation, and decision retr
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
     service.close();
     assert.equal(dirname(resolve(folder)), resolve(tmpdir()));
-    assert.ok(folder.includes('clearport-api-'));
+    assert.ok(folder.includes('instill-api-'));
     rmSync(folder, { recursive: true, force: true });
   }
 });
@@ -282,7 +282,7 @@ test('production identity is fixed, role switching disabled, and credentials req
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     assert.equal((await fetch(`${base}/api/state`)).status, 401);
-    const auth = `Basic ${Buffer.from('clearport:test-password-for-runtime').toString('base64')}`;
+    const auth = `Basic ${Buffer.from('instill:test-password-for-runtime').toString('base64')}`;
     const response = await fetch(`${base}/api/state`, { headers: { Authorization: auth } });
     assert.equal(response.status, 200);
     const cookie = response.headers.get('set-cookie')!.split(';')[0];

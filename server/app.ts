@@ -289,8 +289,8 @@ export function createApp(options: AppOptions = {}) {
     let token = (req.headers.cookie ?? '')
       .split(';')
       .map((part) => part.trim())
-      .find((part) => part.startsWith('clearport_session='))
-      ?.slice('clearport_session='.length);
+      .find((part) => part.startsWith('instill_session='))
+      ?.slice('instill_session='.length);
     const active = token ? sessions.get(token) : undefined;
     let userId = active && active.expires > Date.now() ? active.userId : undefined;
     if (!userId && !demoMode) {
@@ -303,11 +303,11 @@ export function createApp(options: AppOptions = {}) {
       const supplied = Buffer.from(decoded.slice(separator + 1));
       const expected = Buffer.from(accessPassword!);
       if (
-        username !== 'clearport' ||
+        !['instill', 'clearport'].includes(username) ||
         supplied.length !== expected.length ||
         !timingSafeEqual(supplied, expected)
       ) {
-        res.setHeader('WWW-Authenticate', 'Basic realm="Clearport", charset="UTF-8"');
+        res.setHeader('WWW-Authenticate', 'Basic realm="Instill", charset="UTF-8"');
         return next(new ApiError(401, 'Authentication required.'));
       }
       userId = fixedUserId;
@@ -318,7 +318,7 @@ export function createApp(options: AppOptions = {}) {
       sessions.set(token, { userId, expires: Date.now() + 12 * 60 * 60 * 1000 });
       if (sessions.size > 1000)
         for (const [key, value] of sessions) if (value.expires < Date.now()) sessions.delete(key);
-      res.cookie('clearport_session', token, {
+      res.cookie('instill_session', token, {
         httpOnly: true,
         sameSite: 'strict',
         secure: cookieSecure || req.secure,
@@ -826,7 +826,7 @@ export function createApp(options: AppOptions = {}) {
   });
   app.get('/api/export', (_req, res) => {
     manager(res);
-    res.attachment(`clearport-workspace-${now().toISOString().slice(0, 10)}.json`);
+    res.attachment(`instill-workspace-${now().toISOString().slice(0, 10)}.json`);
     res.json({
       schemaVersion: 1,
       exportedAt: now().toISOString(),
@@ -862,10 +862,7 @@ export function createApp(options: AppOptions = {}) {
       res.status(413).json({ error: 'The request is too large.' });
       return;
     }
-    console.error(
-      'Clearport request failed:',
-      error instanceof Error ? error.name : 'UnknownError',
-    );
+    console.error('Instill request failed:', error instanceof Error ? error.name : 'UnknownError');
     res.status(500).json({ error: 'The request could not be completed. Please try again.' });
   });
   return {

@@ -6,7 +6,7 @@ const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? '127.0.0.1';
 const server = service.app.listen(port, host, () => {
   const displayHost = host.includes(':') ? `[${host}]` : host;
-  console.log(`Clearport API running at http://${displayHost}:${port}`);
+  console.log(`Instill API running at http://${displayHost}:${port}`);
   console.log(
     'Singapore workspace · internal approval only · no external declarations or messages are sent',
   );

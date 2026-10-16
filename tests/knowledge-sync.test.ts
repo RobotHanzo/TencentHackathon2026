@@ -45,7 +45,7 @@ class FakeClient implements KnowledgeClient {
   }
 }
 function fixture(t: TestContext, items: Knowledge[] = [approved], autoPublish = false) {
-  const directory = mkdtempSync(join(tmpdir(), 'clearport-sync-'));
+  const directory = mkdtempSync(join(tmpdir(), 'instill-sync-'));
   const path = join(directory, 'workspace.db');
   let time = new Date('2026-10-15T01:00:00.000Z');
   let store = new Store(path, time);
@@ -62,7 +62,7 @@ function fixture(t: TestContext, items: Knowledge[] = [approved], autoPublish = 
     store.close();
     const child = relative(resolve(tmpdir()), resolve(directory));
     assert.ok(
-      !isAbsolute(child) && !child.startsWith('..') && /^clearport-sync-[^\\/]+$/.test(child),
+      !isAbsolute(child) && !child.startsWith('..') && /^instill-sync-[^\\/]+$/.test(child),
     );
     rmSync(directory, { recursive: true, force: true });
   });

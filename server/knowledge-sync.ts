@@ -265,7 +265,7 @@ export class KnowledgeSync {
       ) {
         current = ready[0];
         const result = await this.client.createRelease(
-          'Publish Clearport manager-approved knowledge.',
+          'Publish Instill manager-approved knowledge.',
         );
         if (this.stopped) return;
         // One atomic write records a shared release for this entire batch.

@@ -6,6 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': process.env.CLEARPORT_API_TARGET || 'http://127.0.0.1:3001' },
+    proxy: {
+      '/api':
+        process.env.INSTILL_API_TARGET ||
+        process.env.CLEARPORT_API_TARGET ||
+        'http://127.0.0.1:3001',
+    },
   },
 });

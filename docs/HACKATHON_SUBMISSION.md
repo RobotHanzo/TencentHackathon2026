@@ -1,6 +1,6 @@
-# Clearport — submission working draft
+# Instill — submission working draft
 
-**Project title:** Clearport  
+**Project title:** Instill\
 **Short blurb:** Expert customs knowledge, captured in every approval.  
 **Blurb length:** 7 words  
 **Product scope:** Singapore customs brokerage, English-language interface  
@@ -12,13 +12,13 @@ This document prepares the project narrative and identifies evidence still neede
 
 Customs brokerage staff prepare declarations, supporting documents, and customer communications under time pressure. Written instructions alone do not ensure that an employee notices a relevant exception. Senior staff repeatedly correct similar mistakes, but the reasoning behind those corrections often stays in a conversation or a marked-up document.
 
-Clearport places a specialist advisor before management approval and turns the manager's normal review into reusable knowledge. Employees get contextual checks and an agent consultation workspace. Managers keep the final decision, can reject unsuitable AI advice, and leave the reasoning that helps the next employee.
+Instill places a specialist advisor before management approval and turns the manager's normal review into reusable knowledge. Employees get contextual checks and an agent consultation workspace. Managers keep the final decision, can reject unsuitable AI advice, and leave the reasoning that helps the next employee.
 
 The discovery evidence is the [interview summary](USER_STORY_SUMMARY.md), [original transcript](USER_STORY_TRANSCRIPT.md), and [customs service description](CUSTOMS_SERVICE.md). The strongest findings are that proactive reminders are needed at the moment of work, human review must remain, and knowledge capture should not create a separate administrative task. These interviews establish a workflow problem; they do not establish Singapore regulations or measured product effectiveness.
 
 ## Solution and current implementation
 
-| Need | Clearport workflow |
+| Need | Instill workflow |
 | --- | --- |
 | Capture existing expertise | Import text-bearing PDF, DOCX, TXT, MD, EML, or CSV documents and associate the extracted knowledge with a specialist skill. |
 | Capture undocumented judgment | Record accept/reject decisions and explanations while managers review case-specific recommendations. |
@@ -58,11 +58,11 @@ flowchart TD
     Review --> HumanGate[Human document approval]
 ```
 
-The browser communicates with the API on the team's Docker host through HTTPS. Durable workflow data stays in its SQLite volume; text extraction and local retrieval run in Clearport. Optional Tencent connections are outbound HTTPS calls from the backend. ADP receives supplied context and, when enabled, approved knowledge snapshots; COS retains original files only when archival is configured. Approval remains an internal human decision.
+The browser communicates with the API on the team's Docker host through HTTPS. Durable workflow data stays in its SQLite volume; text extraction and local retrieval run in Instill. Optional Tencent connections are outbound HTTPS calls from the backend. ADP receives supplied context and, when enabled, approved knowledge snapshots; COS retains original files only when archival is configured. Approval remains an internal human decision.
 
 ## What makes this more than a chatbot
 
-A consultation-only system waits for an employee to recognize a problem. Clearport also checks the document before approval and presents a concrete finding in the context of that case. It then records whether the expert accepted the suggestion, rejected it, or requested a correction. The decision becomes part of the knowledge used in later work. Case workflow, evidence, and human review are therefore part of the product, rather than surrounding manual tasks.
+A consultation-only system waits for an employee to recognize a problem. Instill also checks the document before approval and presents a concrete finding in the context of that case. It then records whether the expert accepted the suggestion, rejected it, or requested a correction. The decision becomes part of the knowledge used in later work. Case workflow, evidence, and human review are therefore part of the product, rather than surrounding manual tasks.
 
 The local baseline does not use model prompts. It selects skills from category and keyword context, ranks approved knowledge, and applies deterministic checks. Automotive descriptions with wireless components can select both automotive and electronics expertise, alongside general cargo guidance. This is bounded specialist routing, not a claim of autonomous multi-agent negotiation.
 
@@ -72,7 +72,7 @@ When demonstrating a live provider, add the actual provider/model details and a 
 
 ## Keppel challenge alignment
 
-The handbook's named scenario is commercial real estate. Clearport uses customs brokerage as the implemented evidence-backed domain; the shared capability is turning expert corrections into governed, reusable support. The real estate mapping is a proposed extension, not an implemented property-management integration.
+The handbook's named scenario is commercial real estate. Instill uses customs brokerage as the implemented evidence-backed domain; the shared capability is turning expert corrections into governed, reusable support. The real estate mapping is a proposed extension, not an implemented property-management integration.
 
 | Implemented brokerage pattern | Proposed Keppel application |
 | --- | --- |
@@ -88,7 +88,7 @@ An “Intelligence Pill” can be represented by a skill and its approved suppor
 
 - **Review before use:** imported material is a candidate until approved. Review decisions preserve whether the advice was accepted or rejected and why.
 - **Source visibility:** recommendations and agent responses identify the knowledge that supports them. A citation establishes provenance, not that the source is necessarily correct.
-- **Human decision:** a document approval is performed by a manager after all suggestions have received decisions; authors cannot approve their own cases. Editing a case invalidates the previous review. Clearport does not submit declarations or send external correspondence.
+- **Human decision:** a document approval is performed by a manager after all suggestions have received decisions; authors cannot approve their own cases. Editing a case invalidates the previous review. Instill does not submit declarations or send external correspondence.
 - **Scope:** skills and demo data are Singapore-specific. Reference links do not establish a live regulatory feed or authority endorsement.
 - **Access:** role switching is a demonstration mechanism, not secure login. A non-demo mode offers a password gate and fixed persona, but production requires appropriate transport protection, authenticated multi-user identities, and organization-level isolation.
 - **Data ownership:** records are held in a local SQLite database under the team's control, with workspace export support. A formal versioned capability export/import contract is future work.
@@ -132,7 +132,7 @@ The controlling source is the supplied [hackathon handbook](hackathon_requiremen
 | --- | --- |
 | Original project built using CodeBuddy or WorkBuddy | **Evidence pending.** The team must genuinely use at least one required product in development. This build does not establish that requirement by itself. |
 | At least 3 screenshots or a screen recording of CodeBuddy/WorkBuddy chat history | **Pending team evidence.** Capture authentic development conversations and redact secrets. Do not generate substitute screenshots or invented logs. |
-| Project title | Drafted: Clearport. |
+| Project title | Drafted: Instill. |
 | Short blurb under 10 words | Drafted above: 7 words. |
 | Project description: scenario, users, value, evidence, architecture, prompts, impact | Working draft in this document; add actual provider/prompt evidence if using live mode and final validation results. |
 | 16:9 cover image | **Pending.** Handbook recommends 380×216 px. |

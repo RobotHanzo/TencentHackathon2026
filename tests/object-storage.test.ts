@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { OriginalStorage } from '../server/object-storage.ts';
 
 const config = {
-  bucket: 'clearport-test-1250000000',
+  bucket: 'instill-test-1250000000',
   secretId: 'fixture-secret-id',
   secretKey: 'fixture-secret-key',
   sessionToken: 'fixture-token',
@@ -16,7 +16,7 @@ test('COS archives exact original bytes in Singapore with a signed request and n
     calls++;
     assert.match(
       String(url),
-      /^https:\/\/clearport-test-1250000000\.cos\.ap-singapore\.myqcloud\.com\/originals\/case-1\/[a-f0-9]{64}\.pdf$/,
+      /^https:\/\/instill-test-1250000000\.cos\.ap-singapore\.myqcloud\.com\/originals\/case-1\/[a-f0-9]{64}\.pdf$/,
     );
     assert.equal(options?.method, 'PUT');
     assert.equal(options?.redirect, 'error');

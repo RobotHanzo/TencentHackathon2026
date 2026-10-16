@@ -199,7 +199,7 @@ test('ADP connection is configured until an actual grounded request, with manage
 });
 
 test('ADP conversations persist while remaining isolated by user and skill and absent from public state', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'clearport-adp-context-'));
+  const directory = mkdtempSync(join(tmpdir(), 'instill-adp-context-'));
   const dbPath = join(directory, 'context.db');
   const adp = await fakeAdp();
   let app: Awaited<ReturnType<typeof application>> | undefined;
@@ -250,7 +250,7 @@ test('ADP conversations persist while remaining isolated by user and skill and a
     await app?.close();
     await adp.close();
     assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
-    assert.ok(directory.includes('clearport-adp-context-'));
+    assert.ok(directory.includes('instill-adp-context-'));
     rmSync(directory, { recursive: true, force: true });
   }
 });

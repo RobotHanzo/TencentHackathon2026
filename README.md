@@ -1,8 +1,8 @@
-# Clearport
+# Instill
 
 **Expert knowledge, carried forward.**
 
-Clearport is an English-language customs brokerage workspace for Singapore. Employees prepare outward-facing documents, specialist agents review them before management approval, and senior decisions become reusable knowledge. The central product is the knowledge and approval loop: advice has sources, people make decisions, and reviewed experience informs the next case.
+Instill is an English-language customs brokerage workspace for Singapore. Employees prepare outward-facing documents, specialist agents review them before management approval, and senior decisions become reusable knowledge. The central product is the knowledge and approval loop: advice has sources, people make decisions, and reviewed experience informs the next case.
 
 This repository contains a local full-stack hackathon prototype built with React, Vite, TypeScript, Express, and SQLite. It includes seeded demonstration records and a deterministic local advisor so the core workflow runs without an AI account.
 
@@ -68,7 +68,7 @@ ADP_ENDPOINT=https://wss.lke.tencentcloud.com/adp/v2/chat
 
 ADP uses its native SSE API. Conversations are isolated by workspace user and selected skill; every document review starts a fresh conversation. The Settings page distinguishes configuration from a successful connection check. Unknown citations, failed requests and incomplete responses produce an explicit local fallback. Chat needs only the published application key; it does not require CVM or CAM credentials. See [the ADP agent setup](deploy/adp-agent.md), [Tencent access](deploy/tencent-access.md), and [DEPLOY.md](DEPLOY.md) for self-hosting and verification.
 
-Optional ADP knowledge synchronization queues manager-approved imports and accepted/rejected decisions in SQLite, uploads immutable Markdown snapshots, and tracks indexing and publication. Retries resume after restart. Automatic publication is disabled by default because Tencent's documented release API publishes every draft in the ADP application; enable it only for a dedicated Clearport application. This management integration uses Tencent credentials separately from the chat AppKey. Its documented International API is marked deprecated, so verify compatibility with the actual account before relying on synchronization.
+Optional ADP knowledge synchronization queues manager-approved imports and accepted/rejected decisions in SQLite, uploads immutable Markdown snapshots, and tracks indexing and publication. Retries resume after restart. Automatic publication is disabled by default because Tencent's documented release API publishes every draft in the ADP application; enable it only for a dedicated Instill application. This management integration uses Tencent credentials separately from the chat AppKey. Its documented International API is marked deprecated, so verify compatibility with the actual account before relying on synchronization.
 
 An optional private Singapore COS bucket retains original uploaded files. With archival enabled, imports fail visibly if COS cannot store the original. Without it, the workspace retains extracted text only. Scanned-PDF OCR remains outside the current import flow.
 
@@ -96,7 +96,7 @@ Permit identifiers, dates, customers, cases, and operational notes in the demo a
 
 ## Why this workflow
 
-The research in [the interview summary](docs/USER_STORY_SUMMARY.md) identifies a specific failure: employees can have the right SOP and still overlook a check at the moment of work. The interviewee also insists on human review and worries about extra record-keeping. Clearport therefore places advice in document preparation and captures knowledge from decisions managers already make.
+The research in [the interview summary](docs/USER_STORY_SUMMARY.md) identifies a specific failure: employees can have the right SOP and still overlook a check at the moment of work. The interviewee also insists on human review and worries about extra record-keeping. Instill therefore places advice in document preparation and captures knowledge from decisions managers already make.
 
 [The service description](docs/CUSTOMS_SERVICE.md) explains the real work behind the interface: receiving emailed documents, extracting shipment details, selecting goods classifications, checking supporting information, coordinating clearance, and communicating with customers. These source documents are qualitative discovery evidence, not a Singapore regulatory specification. The original Chinese documents and transcript are retained unchanged.
 
@@ -117,11 +117,11 @@ These links were consulted on 14 October 2026. Seeded rules are illustrative int
 
 The employee/manager selector is a **demo persona switch, not production authentication**. The local API's role checks help demonstrate the workflow, but a client-selected identity is not a secure authorization boundary. Run this prototype on localhost with sample data.
 
-`DEMO_MODE` defaults to enabled unless `NODE_ENV=production`. Outside demo mode, the server requires `APP_ACCESS_PASSWORD`, uses HTTP Basic authentication with username `clearport`, and fixes the persona to `APP_USER_ID` (default `manager-sarah`); role switching is disabled. This optional password gate is a single-user deployment aid, not enterprise identity management, and HTTP Basic must not be exposed without transport protection.
+`DEMO_MODE` defaults to enabled unless `NODE_ENV=production`. Outside demo mode, the server requires `APP_ACCESS_PASSWORD`, uses HTTP Basic authentication with username `instill`, and fixes the persona to `APP_USER_ID` (default `manager-sarah`); role switching is disabled. This optional password gate is a single-user deployment aid, not enterprise identity management, and HTTP Basic must not be exposed without transport protection.
 
 Before deployment, add authenticated identities and server-managed sessions, enforce organization and record access, establish data retention and backup policies, protect document uploads, and validate regulatory content with qualified owners. The current record history demonstrates accountability within the prototype; it is not a tamper-proof compliance archive. Formal capability release versioning and rollback require additional work before enterprise use.
 
-The dependency audit reports three moderate findings from one [sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c), through Mammoth's command-line dependency chain. No patched version was available during verification. Clearport uses Mammoth's library text-extraction API; the exercised DOCX import path does not load `argparse` or `sprintf-js`. The installed dependency finding remains open.
+The dependency audit reports three moderate findings from one [sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c), through Mammoth's command-line dependency chain. No patched version was available during verification. Instill uses Mammoth's library text-extraction API; the exercised DOCX import path does not load `argparse` or `sprintf-js`. The installed dependency finding remains open.
 
 ## Hackathon preparation
 

@@ -110,7 +110,7 @@ test('approved snapshots preserve provenance and rejected decisions without muta
     renderKnowledge(rejected),
     /Do not present that rejected advice as an approved requirement/,
   );
-  assert.match(renderKnowledge(rejected), /"clearportKnowledgeId": "knowledge-1"/);
+  assert.match(renderKnowledge(rejected), /"instillKnowledgeId": "knowledge-1"/);
   assert.match(renderKnowledge(rejected), /"caseId": "case-1"/);
   assert.match(renderKnowledge(rejected), /"skillId": "skill-electronics"/);
   assert.equal(knowledgeDigest(item), knowledgeDigest({ ...item, adpStatus: 'synced' }));
@@ -233,14 +233,14 @@ test('document and release polling never treats parsing, review, paused, or fail
       requestId: 'test-request-id',
     });
   }
-  assert.deepEqual(await client.createRelease('Clearport approved knowledge'), {
+  assert.deepEqual(await client.createRelease('Instill approved knowledge'), {
     releaseId: 'release-100',
     requestId: 'test-request-id',
   });
   // The documented operation is explicitly app-wide: no invented document scope.
   assert.deepEqual(JSON.parse(String(calls[22].body)), {
     BotBizId: '12345',
-    Desc: 'Clearport approved knowledge',
+    Desc: 'Instill approved knowledge',
   });
   for (const [remoteStatus, status] of releaseStates) {
     assert.deepEqual(await client.getRelease('release-100'), {

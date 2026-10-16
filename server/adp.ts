@@ -50,7 +50,7 @@ export async function runAdpChat(
   const conversationId = input.conversationId ?? randomUUID();
   if (!/^[a-zA-Z0-9_-]{32,64}$/.test(conversationId))
     throw new Error('Invalid ADP conversation identifier.');
-  const visitorId = input.visitorId ?? `clearport-${randomUUID()}`;
+  const visitorId = input.visitorId ?? `instill-${randomUUID()}`;
   if (!visitorId || visitorId.length > 255 || /[\r\n\0]/.test(visitorId))
     throw new Error('Invalid ADP visitor identifier.');
   const timeout = Math.max(1, Math.min(config.timeoutMs ?? 20_000, 60_000));

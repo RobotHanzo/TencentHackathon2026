@@ -101,11 +101,11 @@ function Status({ status }: { status: string }) {
 }
 function Logo({ small = false }: { small?: boolean }) {
   return (
-    <div className={`brand ${small ? 'brand-small' : ''}`}>
+    <div className={`brand ${small ? 'brand-small' : ''}`} role="img" aria-label="Instill">
       <span className="brand-mark">
         <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
           <path
-            d="M24 8H15a8 8 0 0 0 0 16h9M18 12l6 4-6 4"
+            d="M12 8h8M16 8v16M12 24h8"
             stroke="currentColor"
             strokeWidth="2.8"
             strokeLinecap="round"
@@ -115,7 +115,7 @@ function Logo({ small = false }: { small?: boolean }) {
       </span>
       {!small && (
         <span>
-          clearport<span className="brand-period">.</span>
+          instill<span className="brand-period">.</span>
         </span>
       )}
     </div>
