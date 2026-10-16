@@ -169,8 +169,6 @@ export function createApp(options: AppOptions = {}) {
       ? process.env.DEMO_MODE === 'true'
       : process.env.NODE_ENV !== 'production');
   const accessPassword = options.accessPassword ?? process.env.APP_ACCESS_PASSWORD;
-  if (process.env.NODE_ENV === 'production' && demoMode)
-    throw new Error('Production requires DEMO_MODE=false and an access password.');
   if (!demoMode && (!accessPassword || accessPassword.length < 12))
     throw new Error('Non-demo mode requires an APP_ACCESS_PASSWORD of at least 12 characters.');
   const ai = options.ai ?? {
@@ -390,7 +388,7 @@ export function createApp(options: AppOptions = {}) {
     res.json(state);
   });
   app.post('/api/session', (req, res) => {
-    if (!demoMode) fail(403, 'Role switching is available only in local demo mode.');
+    if (!demoMode) fail(403, 'Role switching is available only in demo mode.');
     const selected =
       store.read().users.find((entry) => entry.id === req.body?.userId) ??
       fail(400, 'Unknown demo user.');

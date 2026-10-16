@@ -10,11 +10,11 @@ services:
       - '127.0.0.1:${INSTILL_PORT:-${CLEARPORT_PORT:-3001}}:3001'
     environment:
       NODE_ENV: production
-      DEMO_MODE: 'false'
+      DEMO_MODE: ${DEMO_MODE:-false}
       HOST: 0.0.0.0
       PORT: '3001'
       DATA_PATH: /app/data/instill.db
-      APP_ACCESS_PASSWORD: ${APP_ACCESS_PASSWORD:?Set APP_ACCESS_PASSWORD in .env.deploy (at least 12 characters)}
+      APP_ACCESS_PASSWORD: ${APP_ACCESS_PASSWORD:-}
       APP_USER_ID: ${APP_USER_ID:-manager-sarah}
       APP_COOKIE_SECURE: ${APP_COOKIE_SECURE:-false}
       AI_PROVIDER: ${AI_PROVIDER:-local}

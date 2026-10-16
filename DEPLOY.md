@@ -41,13 +41,16 @@ chmod 600 .env.deploy
 nano .env.deploy
 ```
 
-Set `APP_ACCESS_PASSWORD` to a unique value of at least 12 characters. The login username is **instill**. `APP_USER_ID` defaults to the seeded manager `manager-sarah`; it does not create a new identity. Quote values containing `$` with single quotes in the environment file to prevent Compose interpolation.
+By default, set `APP_ACCESS_PASSWORD` to a unique value of at least 12 characters. The login username is **instill**. `APP_USER_ID` defaults to the seeded manager `manager-sarah`; it does not create a new identity. Quote values containing `$` with single quotes in the environment file to prevent Compose interpolation.
+
+For a login-free demo, set `DEMO_MODE=true` in `.env.deploy`; `APP_ACCESS_PASSWORD` can then be blank. This works with the production Docker image, opens the workspace without a login prompt, and enables demo persona switching for visitors. Use sample data for this shared demo. Set `DEMO_MODE=false` and supply a password to restore login. Apply environment changes with `docker compose --env-file .env.deploy up -d --wait`, including your usual overlays; a plain container restart does not apply new values.
 
 | Setting               | Purpose                                                                         |
 | --------------------- | ------------------------------------------------------------------------------- |
 | `CLEARPORT_IMAGE`     | Published GHCR image; prefer a `sha-<full-40-character-commit-SHA>` tag.        |
 | `CLEARPORT_PORT`      | Host loopback port; default `3001`.                                             |
-| `APP_ACCESS_PASSWORD` | Required application password.                                                  |
+| `DEMO_MODE`           | `false` by default; `true` skips login and enables demo persona switching.       |
+| `APP_ACCESS_PASSWORD` | Required unless `DEMO_MODE=true`; at least 12 characters outside demo mode.       |
 | `APP_COOKIE_SECURE`   | `true` for HTTPS; `false` only for localhost or an SSH tunnel over HTTP.        |
 | `CLEARPORT_DOMAIN`    | Hostname without a scheme, path or port; required for the supplied HTTPS proxy. |
 | `CLEARPORT_TLS_EMAIL` | Certificate contact email for that proxy.                                       |
@@ -198,7 +201,7 @@ Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own c
 ## 5. Verify
 
 1. Request `/api/health` on the deployed site. It should report `ok: true`; this checks the app, not provider entitlement.
-2. Confirm unauthenticated `/api/state` returns 401, then sign in as `instill` with your application password.
+2. With `DEMO_MODE=false`, confirm unauthenticated `/api/state` returns 401, then sign in as `instill` with your application password. With `DEMO_MODE=true`, confirm it returns 200 without credentials and that demo persona switching works.
 3. With HTTPS, confirm the session cookie has `Secure`, `HttpOnly` and `SameSite=Strict`.
 4. Import fictional knowledge, approve it, review a fictional case, and inspect advice and citations.
 5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success.

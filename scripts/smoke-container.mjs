@@ -69,7 +69,7 @@ function inspectContainer(name, options = {}) {
   return JSON.parse(result.stdout)[0];
 }
 
-function startContainer(name, { authenticate = true, persist = true } = {}) {
+function startContainer(name, { authenticate = true, persist = true, demo = false } = {}) {
   if (inspectContainer(name)) throw new Error('A smoke resource name is already in use.');
   containers.add(name); // A failed docker run can still leave a created container.
   const args = [
@@ -91,7 +91,7 @@ function startContainer(name, { authenticate = true, persist = true } = {}) {
     '--env',
     'NODE_ENV=production',
     '--env',
-    'DEMO_MODE=false',
+    `DEMO_MODE=${demo}`,
     '--env',
     'HOST=0.0.0.0',
     '--env',
@@ -103,11 +103,11 @@ function startContainer(name, { authenticate = true, persist = true } = {}) {
     '--env',
     authenticate ? 'APP_ACCESS_PASSWORD' : 'APP_ACCESS_PASSWORD=',
   ];
-  if (authenticate) args.push('--publish', '127.0.0.1::3001');
+  if (authenticate || demo) args.push('--publish', '127.0.0.1::3001');
   if (persist) args.push('--mount', `type=volume,source=${volume},target=/app/data`);
   args.push(image);
   docker(args);
-  if (!authenticate) return;
+  if (!authenticate && !demo) return;
   const binding = docker(['port', name, '3001/tcp']).stdout.trim();
   assert.match(binding, /^127\.0\.0\.1:\d+$/, 'Smoke container must publish only on loopback.');
   return `http://${binding}`;
@@ -126,7 +126,7 @@ async function request(base, path, { auth = false, method = 'GET', body, timeout
   });
 }
 
-async function waitForHealth(name, base) {
+async function waitForHealth(name, base, demo = false) {
   const readyDeadline = Math.min(deadline, Date.now() + 15_000);
   while (Date.now() < readyDeadline) {
     try {
@@ -134,7 +134,7 @@ async function waitForHealth(name, base) {
       if (response.ok) {
         const health = await response.json();
         assert.equal(health.ok, true);
-        assert.equal(health.demoMode, false, 'Container must use protected, non-demo mode.');
+        assert.equal(health.demoMode, demo, 'Container must report the configured demo mode.');
         return;
       }
     } catch (error) {
@@ -308,6 +308,22 @@ async function main() {
     /APP_ACCESS_PASSWORD|access password/i,
   );
   console.log('PASS fail-closed startup without password');
+
+  docker(['stop', '--time', '10', second]);
+  const demo = `${prefix}-demo`;
+  const demoBase = startContainer(demo, { authenticate: false, demo: true });
+  await waitForHealth(demo, demoBase, true);
+  const demoState = await request(demoBase, '/api/state');
+  assert.equal(demoState.status, 200, 'Demo must allow access without login.');
+  assert.equal(demoState.headers.get('www-authenticate'), null);
+  assert.equal((await demoState.json()).user.id, 'manager-sarah');
+  const switched = await request(demoBase, '/api/session', {
+    method: 'POST',
+    body: { userId: 'employee-amir' },
+  });
+  assert.equal(switched.status, 200);
+  assert.equal((await switched.json()).id, 'employee-amir');
+  console.log('PASS explicit production demo mode without a password or login');
 }
 
 try {
