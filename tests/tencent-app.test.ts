@@ -321,6 +321,15 @@ test('Knowledge API queues only manager-approved documents and decision rational
           item.content.includes(rationale),
       )!;
     assert.ok(decision);
+    assert.equal(decision.status, 'Pending');
+    assert.equal(
+      app.store.read().knowledgeSync?.[decision.id],
+      undefined,
+      'A candidate decision is not synchronized before approval.',
+    );
+    await app.call(`/knowledge/${decision.id}/publish`, {}, 403);
+    await app.call('/session', { userId: 'manager-daniel' });
+    await app.call(`/knowledge/${decision.id}/publish`, {});
     assert.equal(app.store.read().knowledgeSync?.[decision.id].status, 'pending');
     const jobs = Object.keys(app.store.read().knowledgeSync ?? {}).length;
     for (let i = 0; i < jobs * 2; i++) await app.knowledgeSync!.tick();

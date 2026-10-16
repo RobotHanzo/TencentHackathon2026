@@ -205,7 +205,28 @@ Visit `http://127.0.0.1:3002` while the tunnel is open. For Docker on your own c
 2. With `DEMO_MODE=false`, confirm unauthenticated `/api/state` returns 401, then sign in as `instill` with your application password. With `DEMO_MODE=true`, confirm it returns 200 without credentials and that demo persona switching works.
 3. With HTTPS, confirm the session cookie has `Secure`, `HttpOnly` and `SameSite=Strict`.
 4. Import fictional knowledge, approve it, review a fictional case, and inspect advice and citations.
-5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success.
+5. If ADP is enabled and its usage is covered, run **Settings → Check connection**. This makes a real model request. Confirm a connected response and valid sources; a configured status or local fallback is not proof of ADP success. If it fails, the toast and the Advisor panel give the reason; see [When Check connection fails](#when-check-connection-fails).
+
+### When Check connection fails
+
+Instill reports why. A failed check shows the reason in the toast, and **Settings → Advisor** keeps it as *Last failure*. The reason is never the key, the request or the provider's raw reply. The container log has the same lines, tagged `[ai]`:
+
+```sh
+docker compose --env-file .env.deploy logs instill | grep '\[ai\]'
+```
+
+At startup the app also logs whether the host can reach the provider (`[ai] adp endpoint wss.lke.tencentcloud.com is reachable (DNS 97 ms, TLS 89 ms)`). Check connection repeats that test **before** it spends an ADP call, so a network fault is reported as one.
+
+| Reason shown | What it means | What to do |
+| --- | --- | --- |
+| `This host cannot look up wss.lke.tencentcloud.com (ENOTFOUND / EAI_AGAIN)` | The container's DNS is not working. | Fix the host's resolver, or give the container a DNS server (`dns:` in a Compose overlay). |
+| `Could not connect to … over HTTPS (ETIMEDOUT / ECONNREFUSED / CERT_…)` | Outbound HTTPS, a proxy or the host clock is wrong. | Allow outbound TCP 443 to the ADP hostname, and check the host's time. |
+| `ADP rejected the application key (HTTP 401/403)` | The key is wrong, or the ADP application is not published and running. | Re-copy the full AppKey from ADP → Publish → API management and publish the application. |
+| `ADP did not answer within 40 seconds` | The agent was slower than the wait. | Raise `AI_TIMEOUT_MS` (up to 60000), or check the ADP application's model and tools. |
+| `The answer cited an unknown source …` / `did not cite any approved source` | The model ignored the citation format, even after one correction. | Paste the [agent instructions](deploy/adp-agent.md) into the ADP application, and keep its own knowledge base and web search off. |
+| `The hourly AI call budget (120) is used up` | The spending guard is working. | Wait, or raise `AI_CALLS_PER_HOUR`. |
+
+A wrong *format* is usually intermittent, because the model words its citation differently from run to run. Instill accepts the common variants (`[kb-expiry]`, `[kb-expiry, kb-customs]`, a title, `[Source: kb-expiry - Internal SOP]`) and asks once more before falling back, so a failure that persists points to the application's own instructions.
 
 The first run seeds fictional Singapore records. The current Compose project and service are named `instill`; data persists in the `instill_data` volume at `/app/data/instill.db`. Keep one app instance and the same project name, volume mapping and database path when updating. Earlier Clearport volumes are not automatically migrated by the rename. Existing `CLEARPORT_*` deployment variables remain supported. The login username is `instill`; the previous `clearport` username remains accepted with the same password.
 
@@ -232,6 +253,8 @@ docker compose --env-file .env.deploy start --wait instill
 ```
 
 Preserve any SQLite WAL/SHM files with their matching database and keep the completed backup outside the host. With Caddy, also retain its `caddy_data` and `caddy_config` volumes. Original-file COS archival does not cover these volumes. See [SQLite backup guidance](https://www.sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active).
+
+Upgrading from a release that predates Intelligence pill governance needs no manual step. The first read adds an owner and approver (the first two senior reviewers), release v1 and a default scope to each pill, and version 1 to each knowledge entry, without changing any content. Decisions recorded earlier stay approved; decisions recorded afterwards wait for a second approver.
 
 Record the current image reference, update `CLEARPORT_IMAGE` to a tested tag, then:
 

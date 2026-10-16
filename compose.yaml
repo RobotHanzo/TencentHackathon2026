@@ -21,6 +21,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-local}
       ADP_APP_KEY: ${ADP_APP_KEY:-}
       ADP_ENDPOINT: ${ADP_ENDPOINT:-https://wss.lke.tencentcloud.com/adp/v2/chat}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-}
+      AI_CALLS_PER_HOUR: ${AI_CALLS_PER_HOUR:-120}
       ADP_KNOWLEDGE_SYNC: ${ADP_KNOWLEDGE_SYNC:-false}
       ADP_APP_BIZ_ID: ${ADP_APP_BIZ_ID:-}
       ADP_AUTO_PUBLISH: ${ADP_AUTO_PUBLISH:-false}

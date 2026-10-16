@@ -1,10 +1,14 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
-async function switchUser(page: Page, name: 'Amir Rahman' | 'Sarah Tan') {
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('instill.tour.v1', 'done'));
+});
+
+async function switchUser(page: Page, name: 'Amir Rahman' | 'Sarah Tan' | 'Daniel Wong') {
   await page.getByRole('button', { name: 'Switch demo user' }).click();
   await page.getByRole('button', { name: new RegExp(name) }).click();
   await expect(page.getByRole('button', { name: 'Switch demo user' })).toHaveText(
-    name === 'Amir Rahman' ? 'AR' : 'ST',
+    { 'Amir Rahman': 'AR', 'Sarah Tan': 'ST', 'Daniel Wong': 'DW' }[name],
   );
 }
 
@@ -61,7 +65,7 @@ test('every workspace page opens and knowledge filters show real source details'
     fullPage: true,
     animations: 'disabled',
   });
-  await navigate(page, /^Knowledge base$/);
+  await navigate(page, /^Knowledge base/);
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Knowledge base');
   await page.screenshot({
     path: testInfo.outputPath('knowledge-desktop.png'),
@@ -108,21 +112,21 @@ test('every workspace page opens and knowledge filters show real source details'
   expect(failures).toEqual([]);
 });
 
-test('employee creates a skill and imports notes; manager publication makes the source available', async ({
+test('employee proposes a pill and imports notes; manager publication makes the source available', async ({
   page,
 }) => {
   await page.goto('/#knowledge');
   await switchUser(page, 'Amir Rahman');
-  await page.getByRole('button', { name: 'New skill', exact: true }).click();
-  const skillDialog = page.getByRole('dialog', { name: 'New skill' });
-  await skillDialog.getByLabel('Skill name').fill('ORCHID customer procedures');
+  await page.getByRole('button', { name: 'New pill', exact: true }).click();
+  const skillDialog = page.getByRole('dialog', { name: 'New pill' });
+  await skillDialog.getByLabel('Pill name').fill('ORCHID customer procedures');
   await skillDialog.getByLabel('Cargo category').selectOption('Electronics');
   await skillDialog
     .getByLabel('Description')
     .fill(
       'Customer-specific receiving and handover procedures for Singapore wireless sensor shipments.',
     );
-  await skillDialog.getByRole('button', { name: 'Create skill', exact: true }).click();
+  await skillDialog.getByRole('button', { name: 'Create pill', exact: true }).click();
   await expect(skillDialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: /ORCHID customer procedures/ })).toContainText(
     'Draft',
@@ -137,7 +141,7 @@ test('employee creates a skill and imports notes; manager publication makes the 
     );
   await importDialog.getByLabel('Title', { exact: true }).fill('ORCHID amber carton handover');
   await importDialog
-    .getByRole('combobox', { name: 'Skill', exact: true })
+    .getByRole('combobox', { name: 'Pill', exact: true })
     .selectOption({ label: 'ORCHID customer procedures · Electronics' });
   await importDialog.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(importDialog).not.toBeVisible();
@@ -281,7 +285,7 @@ test('expired evidence is caught before approval and reviewer decisions become r
     detail.locator('.approved-note').getByText('Approved', { exact: true }),
   ).toBeVisible();
   await detail.getByRole('button', { name: 'Close document' }).click();
-  await navigate(page, /^Knowledge base$/);
+  await navigate(page, /^Knowledge base/);
   await page.getByRole('button', { name: /^Decisions/ }).click();
   await page
     .getByRole('textbox', { name: 'Search knowledge', exact: true })
@@ -336,7 +340,7 @@ test('advisor selects relevant knowledge and exposes evidence citations', async 
   await expect(page.locator('.chat-message.assistant').last()).toContainText(
     'Food & fresh produce',
   );
-  await navigate(page, /^Knowledge base$/);
+  await navigate(page, /^Knowledge base/);
   // Reviewer decisions can have the same title; identify the entry by its full content.
   const entries = page.getByRole('button', { name: `View ${sourceTitle}`, exact: true });
   await expect(entries.first()).toBeVisible();
@@ -356,7 +360,7 @@ test('mobile navigation, knowledge and dialogs stay within the viewport', async 
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   for (const link of [
     /^Overview$/,
-    /^Knowledge base$/,
+    /^Knowledge base/,
     /^Review queue/,
     /^Ask an agent/,
     /^Activity$/,
@@ -371,7 +375,7 @@ test('mobile navigation, knowledge and dialogs stay within the viewport', async 
     }));
     expect(sizes.width, `Horizontal overflow on ${link}`).toBeLessThanOrEqual(sizes.viewport + 1);
   }
-  await navigate(page, /^Knowledge base$/);
+  await navigate(page, /^Knowledge base/);
   await page.screenshot({
     path: testInfo.outputPath('knowledge-mobile.png'),
     fullPage: true,
@@ -537,4 +541,194 @@ test('selected document passages retain comments, overlapping highlights and ear
   await composer.getByRole('button', { name: 'Post comment', exact: true }).click();
   await expect(composer).not.toBeVisible();
   await expect(document.locator('mark')).toHaveText(quote);
+});
+
+test('a reviewer decision waits for a second person; the missed-finding form and pill releases work end to end', async ({
+  page,
+}) => {
+  await page.goto('/#reviews');
+  await page.getByRole('button', { name: /^Wireless sensors · import declaration/ }).click();
+  const detail = page.getByRole('dialog', {
+    name: 'Wireless sensors · import declaration',
+    exact: true,
+  });
+  const expiry = detail
+    .getByRole('article')
+    .filter({ has: page.getByRole('heading', { name: /expir/i }) });
+  await expiry
+    .getByRole('textbox')
+    .fill('Permit expiry matters for wireless goods; obtain the renewed licence first.');
+  await expiry.getByRole('button', { name: 'Accept advice', exact: true }).click();
+  await expect(expiry.getByText('Accepted', { exact: true })).toBeVisible();
+  await expect(expiry).toContainText('awaiting a second approver');
+
+  // The advisor cannot see everything: the reviewer adds a finding it missed.
+  await detail.getByRole('button', { name: 'Add a finding the advisor missed' }).click();
+  await detail.getByLabel('What did the advisor miss?').fill('Antenna gain is not declared');
+  await detail
+    .getByLabel('What should be checked?')
+    .fill('Ask the customer for the antenna gain figure.');
+  await detail
+    .getByLabel('Why does it matter?')
+    .fill('A higher gain needs a different licence class and the advisor did not raise it.');
+  await detail.getByRole('button', { name: 'Add finding', exact: true }).click();
+  const added = detail.getByRole('article').filter({ hasText: 'Antenna gain is not declared' });
+  await expect(added.getByText('Added by reviewer', { exact: true })).toBeVisible();
+  await expect(added.getByText('Accepted', { exact: true })).toBeVisible();
+  await detail.getByRole('button', { name: 'Close document' }).click();
+
+  await navigate(page, /^Knowledge base/);
+  await page.getByRole('button', { name: /^Awaiting approval/ }).click();
+  const rows = page.locator('.knowledge-row');
+  await expect(
+    rows.filter({ hasText: 'Missed by advisor: Antenna gain is not declared' }),
+  ).toHaveCount(1);
+  await rows.filter({ hasText: 'Missed by advisor: Antenna gain is not declared' }).click();
+  const knowledge = page.getByRole('dialog', { name: 'Knowledge detail' });
+  await expect(knowledge.getByRole('button', { name: 'Approve knowledge' })).toBeDisabled();
+  await expect(knowledge).toContainText('A second person must approve');
+  await knowledge.getByRole('button', { name: 'Close', exact: true }).click();
+
+  await switchUser(page, 'Daniel Wong');
+  await rows.filter({ hasText: 'Missed by advisor: Antenna gain is not declared' }).click();
+  await knowledge.getByRole('button', { name: 'Approve knowledge', exact: true }).click();
+  await expect(knowledge.getByText('Approved', { exact: true })).toBeVisible();
+  await knowledge.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.locator('.skill-card').filter({ hasText: 'Electronics & telecoms' }).click();
+  const panel = page.getByRole('region', { name: /Electronics & telecoms governance/ });
+  await expect(panel).toContainText('Release v2');
+  await expect(panel).toContainText('Sarah Tan');
+  await expect(panel).toContainText('Daniel Wong');
+  await panel.getByText('Release history').click();
+  await expect(panel.getByText('Approved: Missed by advisor')).toBeVisible();
+});
+
+test('a pill change is proposed by one person, released by another, and can be rolled back', async ({
+  page,
+}) => {
+  await page.goto('/#knowledge');
+  await page.locator('.skill-card').filter({ hasText: 'Automotive & components' }).click();
+  const panel = page.getByRole('region', { name: /Automotive & components governance/ });
+  await expect(panel).toContainText('Release v1');
+  await panel.getByRole('button', { name: 'Propose a change', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: /Propose a change to Automotive/ });
+  await dialog
+    .getByLabel('Guardrails (one per line)')
+    .fill(
+      'Do not copy a previous HS classification without checking the product facts\nAsk for the radio test report before declaring',
+    );
+  await dialog
+    .getByLabel('Why is this changing?')
+    .fill('A near miss showed we need the test report.');
+  await dialog.getByRole('button', { name: 'Propose change', exact: true }).click();
+  await expect(panel).toContainText('Change proposed by Sarah Tan');
+  await expect(panel).toContainText('Release v1');
+  await expect(panel.getByRole('button', { name: 'Release change' })).toBeDisabled();
+
+  await switchUser(page, 'Daniel Wong');
+  await panel.getByRole('button', { name: 'Release change', exact: true }).click();
+  await expect(panel).toContainText('Release v2');
+  await expect(panel).toContainText('Ask for the radio test report before declaring');
+  await panel.getByText('Release history').click();
+  await panel.getByRole('button', { name: 'Roll back', exact: true }).click();
+  await expect(panel).toContainText('Release v3');
+  await expect(panel).not.toContainText('Ask for the radio test report before declaring');
+  await expect(panel.getByText('Rolled back to v1')).toBeVisible();
+});
+
+test.describe('guided tour', () => {
+  test.beforeEach(async ({ page }) => {
+    // Undo the shared opt-out: these tests are about a first visit.
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem('e2e-first-visit')) {
+        localStorage.removeItem('instill.tour.v1');
+        sessionStorage.setItem('e2e-first-visit', '1');
+      }
+    });
+  });
+
+  test('a first visit explains where Tencent ADP is involved, step by step, and is skippable', async ({
+    page,
+  }) => {
+    const failures: string[] = [];
+    page.on('pageerror', (error) => failures.push(error.message));
+    await page.goto('/');
+    const card = page.getByRole('dialog', { name: 'Welcome to Instill' });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('Tencent ADP');
+    await expect(card).toContainText('Not connected on this deployment');
+    await expect(card.getByText('Step 1 of 11')).toBeVisible();
+
+    await card.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByRole('dialog', { name: 'Your queue' })).toBeVisible();
+    await expect(page.locator('.tour-spot')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Next' }).click();
+    const review = page.getByRole('dialog', { name: 'Specialist pills pre-review the document' });
+    await expect(review).toBeVisible();
+    await expect(review.locator('.tour-adp')).toContainText('Tencent ADP');
+    await expect(page.getByRole('heading', { name: 'Agent pre-review' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Review queue');
+
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(
+      page.getByRole('dialog', { name: /Bounded: when a person must take over/ }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Next' }).click();
+    const decide = page.getByRole('dialog', { name: 'You decide, and say why' });
+    await expect(decide.locator('.tour-adp')).toContainText('Drafts those fields');
+    await page.getByRole('button', { name: 'Next' }).click();
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Decisions are candidates, not guidance' }),
+    ).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Knowledge base');
+    await expect(page.getByRole('button', { name: /^Awaiting approval/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(
+      page.getByRole('dialog', { name: /An Intelligence pill has an owner/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('region', { name: /Electronics & telecoms governance/ }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Ask an agent' }).locator('.tour-adp'),
+    ).toContainText('Tencent ADP');
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'See exactly how Tencent ADP is connected' }),
+    ).toBeVisible();
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByRole('dialog', { name: 'Your turn' })).toBeVisible();
+    await page.getByRole('button', { name: 'Finish' }).click();
+    await expect(page.getByTestId('tour')).toHaveCount(0);
+
+    await page.reload();
+    await page.waitForTimeout(1500);
+    await expect(page.getByTestId('tour')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Take the guided tour' }).click();
+    await expect(page.getByRole('dialog', { name: 'Welcome to Instill' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('tour')).toHaveCount(0);
+    expect(failures).toEqual([]);
+  });
+
+  test('the tour card stays inside a phone screen', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await expect(page.getByRole('dialog', { name: 'Welcome to Instill' })).toBeVisible();
+    for (let step = 0; step < 4; step++) {
+      const box = await page.locator('.tour-card').boundingBox();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+      await page.getByRole('button', { name: 'Next' }).click();
+      await page.waitForTimeout(500);
+    }
+  });
 });

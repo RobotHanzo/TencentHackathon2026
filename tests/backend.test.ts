@@ -132,6 +132,20 @@ test('persistent approval loop, permissions, import isolation, and decision retr
       (entry) => entry.caseId === item.id && entry.decision === 'rejected',
     )!;
     assert.ok(precedent.content.includes('Rejected suggestion'));
+    assert.equal(
+      precedent.status,
+      'Pending',
+      'A recorded decision is a candidate, not yet guidance.',
+    );
+    chat = await call<ChatMessage[]>('/chat', 'POST', {
+      message: 'ORCHID wireless sensors corrected permit exemption',
+      skillId: 'electronics',
+    });
+    assert.ok(!chat.at(-1)!.citations.some((citation) => citation.id === precedent.id));
+    await call(`/knowledge/${precedent.id}/publish`, 'POST', {}, 403);
+    await call('/session', 'POST', { userId: 'manager-daniel' });
+    await call(`/knowledge/${precedent.id}/publish`, 'POST', {});
+    await call('/session', 'POST', { userId: manager.id });
     chat = await call<ChatMessage[]>('/chat', 'POST', {
       message: 'ORCHID wireless sensors corrected permit exemption',
       skillId: 'electronics',
@@ -251,7 +265,19 @@ test('PDF import extracts text, unreadable files are rejected, and new skills re
     await upload('script.exe', 'This is executable input.', 400);
     const tooLarge = await upload('large.txt', new Uint8Array(10 * 1024 * 1024 + 1), 400);
     assert.match(tooLarge.error!, /10 MB/);
-    const published = await fetch(`${base}/knowledge/${imported.id}/publish`, { method: 'POST' });
+    const own = await fetch(`${base}/knowledge/${imported.id}/publish`, { method: 'POST' });
+    assert.equal(own.status, 403, 'The person who imported a document cannot approve it.');
+    const session = await fetch(`${base}/state`);
+    const cookie = session.headers.get('set-cookie')!.split(';')[0];
+    await fetch(`${base}/session`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 'manager-daniel' }),
+    });
+    const published = await fetch(`${base}/knowledge/${imported.id}/publish`, {
+      method: 'POST',
+      headers: { Cookie: cookie },
+    });
     assert.equal(published.status, 200);
     const state = (await (await fetch(`${base}/state`)).json()) as AppState;
     assert.equal(state.skills.find((entry) => entry.id === skill.id)!.status, 'Active');

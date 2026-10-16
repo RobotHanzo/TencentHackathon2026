@@ -21,14 +21,15 @@ The discovery evidence is the [interview summary](USER_STORY_SUMMARY.md), [origi
 | Need | Instill workflow |
 | --- | --- |
 | Capture existing expertise | Import text-bearing PDF, DOCX, TXT, MD, EML, or CSV documents and associate the extracted knowledge with a specialist skill. |
-| Capture undocumented judgment | Record accept/reject decisions and explanations while managers review case-specific recommendations. |
-| Make expertise reusable | Store knowledge with its domain, source, author, approval status, and relationship to a case or skill. |
-| Apply specialist support | Route pre-approval reviews and consultation questions to relevant Singapore skills and cite approved knowledge. |
-| Keep people in control | Managers review individual findings, request changes, and make the internal document approval decision. |
-| Improve later work | Retrieve approved imported knowledge and reviewed decision records for subsequent cases and consultations. |
+| Capture undocumented judgment | Record accept/reject decisions and explanations while managers review case-specific recommendations. A manager can also add a finding the advisor missed, and turn a one-line reason into a structured rule (applies when, check, does not apply when, evidence); the connected AI drafts the rule and asks follow-up questions, and the reviewer confirms. |
+| Make expertise reusable | Each area of expertise is an Intelligence pill: owner, approver, scope, guardrails, escalation triggers, and numbered releases. Knowledge keeps its source, author, approver, version and relationship to a case. |
+| Apply specialist support | Route pre-approval reviews and consultation questions to the relevant pills and cite approved knowledge. A connected model adds observations and judges which recorded decisions apply; the rules do not depend on it. |
+| Keep people in control | Managers review individual findings, request changes, and make the internal document approval decision. A pill's out-of-scope topics and escalation triggers hand a case to a named person instead of producing advice. |
+| Improve later work | Decisions, added findings and imports are candidates. A second person approves them before agents use them; later cases and consultations then retrieve them. |
+| Govern change | Edits to approved knowledge are proposed revisions with version history. Retiring, restoring and changing a pill's definition are recorded as numbered releases, and a rollback restores a previous release's definition and exact knowledge versions. |
 | Preserve the operational context | Keep case content, recommendations, reviewer decisions, comments, and activity in an API-backed SQLite database. |
 
-The default advisor is deterministic retrieval and rule evaluation. Server-side adapters support Tencent Cloud International ADP's native SSE API and OpenAI-compatible providers, with a default 20-second timeout and explicit local fallback. Optional Tencent integrations synchronize approved knowledge through a persistent queue and archive original files in private Singapore COS storage. The application includes a manager-only connection check, publication status and retry controls. The team operates Docker hosting; Tencent supplies the configured application services, with no CVM requirement. See [DEPLOY.md](../DEPLOY.md), [Tencent access](../deploy/tencent-access.md), and [ADP agent setup](../deploy/adp-agent.md). Local protocol tests do not establish live ADP/COS access; service entitlement and deployment still need verification.
+The default advisor is deterministic retrieval and rule evaluation. Server-side adapters support Tencent Cloud International ADP's native SSE API and OpenAI-compatible providers. ADP is given 40 seconds by default (its agent thinks and calls tools first), an hourly call budget protects the Tencent allowance, and every fallback to the local advisor states its reason in the interface and the container log. A failed connection check separates a network fault (a DNS and TLS test that costs no allowance) from a rejected key or an unusable answer. Optional Tencent integrations synchronize approved knowledge through a persistent queue and archive original files in private Singapore COS storage. The application includes a manager-only connection check, publication status and retry controls. The team operates Docker hosting; Tencent supplies the configured application services, with no CVM requirement. See [DEPLOY.md](../DEPLOY.md), [Tencent access](../deploy/tencent-access.md), and [ADP agent setup](../deploy/adp-agent.md). Local protocol tests do not establish live ADP/COS access; service entitlement and deployment still need verification.
 
 ## Architecture
 
@@ -48,6 +49,12 @@ flowchart TD
     Router --> Retrieve
     Retrieve --> Checks[Deterministic checks and local response]
     Retrieve -. optional configuration .-> Model[Tencent ADP or OpenAI-compatible provider]
+    Router --> Bounds[Pill scope, guardrails and escalation rules]
+    Bounds --> Checks
+    Review --> Candidate[Candidate knowledge]
+    Candidate --> Second[Second approver: pill owner or approver]
+    Second --> Approved
+    Approved --> Releases[Numbered pill releases and rollback]
     Approved -. optional synchronization .-> ADPKnowledge[ADP knowledge library]
     Extract -. optional original-file archive .-> COS[Private Singapore COS]
     Checks --> Advice[Advice with sources]
@@ -62,7 +69,9 @@ The browser communicates with the API on the team's Docker host through HTTPS. D
 
 ## What makes this more than a chatbot
 
-A consultation-only system waits for an employee to recognize a problem. Instill also checks the document before approval and presents a concrete finding in the context of that case. It then records whether the expert accepted the suggestion, rejected it, or requested a correction. The decision becomes part of the knowledge used in later work. Case workflow, evidence, and human review are therefore part of the product, rather than surrounding manual tasks.
+A consultation-only system waits for an employee to recognize a problem. Instill also checks the document before approval and presents a concrete finding in the context of that case. It then records whether the expert accepted the suggestion, rejected it, or requested a correction, and lets the expert add what the advisor missed. Each of these becomes a candidate that a second person approves before it is used in later work. Case workflow, evidence, human review and release control are therefore part of the product, rather than surrounding manual tasks.
+
+Where a model is connected it does four jobs, each bounded: it adds observations beyond the rules, judges which recorded decisions apply to a case (the lexical ranking only shortlists), drafts a structured rule from a reviewer's reason and asks follow-up questions, and answers consultation questions from approved knowledge. It never decides scope or escalation, and an answer that cites an unknown source is refused after one correction. In a live check against Tencent ADP on 23 October 2026, a connection check, a pre-review, a rule draft and a consultation each returned a grounded result in 5 to 18 seconds; that run also showed ADP answering in another language and citing in several formats, which the English-only instruction, the citation resolver and the retry now handle. One session is not a reliability measurement.
 
 The local baseline does not use model prompts. It selects skills from category and keyword context, ranks approved knowledge, and applies deterministic checks. Automotive descriptions with wireless components can select both automotive and electronics expertise, alongside general cargo guidance. This is bounded specialist routing, not a claim of autonomous multi-agent negotiation.
 
@@ -82,7 +91,7 @@ The handbook's named scenario is commercial real estate. Instill uses customs br
 | Retained correction and explanation | Captured technician diagnosis and supervisor judgment. |
 | Related knowledge used on the next case | Reuse of approved practice across similar equipment and assets. |
 
-An “Intelligence Pill” can be represented by a skill and its approved supporting knowledge. The current prototype demonstrates sources, review states, ownership through actors, and feedback reuse. Full capability release versions, rollback, enterprise access policies, and formal cross-domain orchestration remain future work. A production pill would add an explicit applicability contract, owner, validated decision logic, guardrails, escalation conditions, version, and release approval.
+An “Intelligence Pill” is a first-class object in the prototype: a named owner and a different approver, an in-scope and out-of-scope list, guardrails, escalation triggers, and numbered releases that freeze the definition together with the exact approved knowledge versions. Changes need a second person, and a rollback is itself a release. What remains future work: enterprise access policies by role and sensitivity, formal agent-to-agent coordination (today a case is routed to several pills and their findings are combined), validated decision logic captured from experts rather than written in code, and pills for domains other than the four goods categories, which currently needs a category added in code. Guardrails are instructions to the model and review criteria; only scope and escalation rules, which match words in the document, are enforced in code.
 
 ## Governance and reliability
 
@@ -92,18 +101,19 @@ An “Intelligence Pill” can be represented by a skill and its approved suppor
 - **Scope:** skills and demo data are Singapore-specific. Reference links do not establish a live regulatory feed or authority endorsement.
 - **Access:** role switching is a demonstration mechanism, not secure login. A non-demo mode offers a password gate and fixed persona, but production requires appropriate transport protection, authenticated multi-user identities, and organization-level isolation.
 - **Data ownership:** records are held in a local SQLite database under the team's control, with workspace export support. A formal versioned capability export/import contract is future work.
-- **Release control:** current approval and activity records demonstrate the learning loop. Complete versioned skill releases, rollback, retention controls, and tamper-resistant auditing are not claimed.
+- **Release control:** pill definitions and approved knowledge are versioned; a proposal is released by a second person and can be rolled back. Retention controls and tamper-resistant auditing are not claimed, and the history is a record in the same database, not an independent log.
+- **Cost control:** provider calls are capped per hour across all visitors so a public demo cannot exhaust the Tencent allowance.
 - **Document limitations:** uploads are limited to 10 MB and extraction requires readable text. Scanned PDF OCR and reliable interpretation of every attachment or table are outside the current implementation.
 
 ## Six-to-seven-minute live demonstration
 
 | Time | Action | Point to make |
 | --- | --- | --- |
-| 0:00–0:45 | Introduce the interview finding and show the case workspace. | Staff can overlook a known rule; contextual checking is needed before approval. |
+| 0:00–0:45 | Say "Keppel AI HARVEST", introduce the interview finding, and show the case workspace (the guided tour marks where Tencent ADP is involved). | Staff can overlook a known rule; contextual checking is needed before approval. |
 | 0:45–1:45 | Open a specialist skill and import a small sample document. Review the extracted text with the manager persona. | Existing documents become reviewable knowledge, with a source and domain. |
 | 1:45–3:00 | Open an illustrative electronics case whose permit expiry precedes its shipment date. Run a pre-approval review and open its citations. | The system identifies a specific issue before senior approval. No government validation is implied. |
-| 3:00–4:15 | Switch to the manager persona. Accept a relevant finding, reject an unsuitable suggestion with a reason, and request a document correction where needed. | The manager controls the outcome and can disagree with the advisor. |
-| 4:15–5:15 | Show the captured decision in knowledge, then ask a related question or review a comparable case. | Reviewed experience is available for reuse instead of being lost after a single approval. |
+| 3:00–4:15 | Switch to the manager persona. Note the escalation to the pill owner, accept a finding and have the connected AI draft the reusable rule, reject an unsuitable suggestion with a reason, add a finding the advisor missed, and request a document correction where needed. | The manager controls the outcome, can disagree with the advisor, and the system knows when a person must take over. |
+| 4:15–5:15 | Show the candidates in Awaiting approval, approve one as the second reviewer, then review a comparable case. | Reviewed experience is reused only after a second person approves it, instead of being lost after a single approval. |
 | 5:15–6:00 | Show the case discussion, decision history, and source records. | Advice and accountability remain attached to operational work. |
 | 6:00–7:00 | Explain the architecture, Keppel mapping, and genuine CodeBuddy/WorkBuddy build evidence. | The implementation is practical, its limits are clear, and eligibility evidence is real. |
 

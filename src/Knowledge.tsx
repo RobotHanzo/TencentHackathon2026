@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   BookOpen,
@@ -9,14 +9,18 @@ import {
   ExternalLink,
   FileText,
   FolderOpen,
+  History,
   Leaf,
   LoaderCircle,
   Package,
+  Pencil,
   Plus,
+  RotateCcw,
   Search,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   Truck,
   Upload,
   X,
@@ -25,6 +29,8 @@ import type { AppState, Category, Knowledge, Skill } from '../shared/types';
 import { api } from './api';
 import { sourceUrl } from './sources';
 import { useMotionSettings } from './motion';
+import { Modal } from './Modal';
+import { PillPanel, canGovern } from './Pills';
 
 type PageProps = {
   state: AppState;
@@ -33,7 +39,7 @@ type PageProps = {
   initialQuery?: string;
 };
 const categories: Category[] = ['Electronics', 'Food & produce', 'Automotive', 'General cargo'];
-const tabs = ['All knowledge', 'Playbooks', 'Documents', 'Decisions'] as const;
+const tabs = ['All knowledge', 'Playbooks', 'Documents', 'Decisions', 'Awaiting approval'] as const;
 type Tab = (typeof tabs)[number];
 const sourceTypes: Partial<Record<Tab, Knowledge['sourceType']>> = {
   Playbooks: 'Playbook',
@@ -88,105 +94,22 @@ function SourceIcon({ type, size = 19 }: { type: Knowledge['sourceType']; size?:
   );
 }
 
-function Modal({
-  title,
-  children,
-  onClose,
-  busy = false,
-  wide = false,
-}: {
-  title: string;
-  children: ReactNode;
-  onClose: () => void;
-  busy?: boolean;
-  wide?: boolean;
-}) {
-  const titleId = useId();
-  const { reduced, transition, popover } = useMotionSettings();
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  const busyRef = useRef(busy);
-  closeRef.current = onClose;
-  busyRef.current = busy;
-  useEffect(() => {
-    const previousFocus =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    dialogRef.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busyRef.current) closeRef.current();
-      if (event.key !== 'Tab') return;
-      const controls = [
-        ...(dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
-        ) ?? []),
-      ];
-      const first = controls[0];
-      const last = controls.at(-1);
-      if (!first) {
-        event.preventDefault();
-        return;
-      }
-      if (
-        event.shiftKey &&
-        (document.activeElement === first || document.activeElement === dialogRef.current)
-      ) {
-        event.preventDefault();
-        last?.focus();
-      } else if (
-        !event.shiftKey &&
-        (document.activeElement === last || document.activeElement === dialogRef.current)
-      ) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.body.style.overflow = originalOverflow;
-      document.removeEventListener('keydown', onKey);
-      previousFocus?.focus();
-    };
-  }, []);
-  return (
-    <motion.div
-      className="modal-backdrop"
-      initial={reduced ? false : { opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={transition}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) onClose();
-      }}
-    >
-      <motion.div
-        className={`modal${wide ? ' modal-wide' : ''}`}
-        initial={popover.initial}
-        animate={popover.animate}
-        transition={popover.transition}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        ref={dialogRef}
-      >
-        <div className="modal-header">
-          <h2 id={titleId}>{title}</h2>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Close dialog"
-            disabled={busy}
-            onClick={onClose}
-          >
-            <X size={20} />
-          </button>
-        </div>
-        {children}
-      </motion.div>
-    </motion.div>
-  );
-}
+const statusLabel = (item: Knowledge) =>
+  item.status === 'Approved'
+    ? 'Approved'
+    : item.status === 'Pending'
+      ? 'Pending approval'
+      : item.approvedAt
+        ? 'Retired'
+        : 'Declined';
+const statusTone = (item: Knowledge) =>
+  item.status === 'Approved'
+    ? 'badge-green'
+    : item.status === 'Pending'
+      ? 'badge-amber'
+      : 'badge-neutral';
+const nameOf = (state: AppState, id: string) =>
+  state.users.find((user) => user.id === id)?.name ?? id;
 
 export function KnowledgeDetailDialog({
   knowledge,
@@ -200,43 +123,85 @@ export function KnowledgeDetailDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [mode, setMode] = useState<'view' | 'edit' | 'decline' | 'retire'>('view');
+  const [title, setTitle] = useState(knowledge.title);
+  const [content, setContent] = useState(knowledge.content);
+  const [note, setNote] = useState('');
+  const pill = state.skills.find((skill) => skill.id === knowledge.skillId);
+  const governs = pill ? canGovern(state, pill) : false;
+  const isAuthor = knowledge.authorId
+    ? knowledge.authorId === state.user.id
+    : knowledge.author === state.user.name;
+  const second = pill
+    ? nameOf(state, [pill.owner, pill.approver].find((id) => id !== state.user.id) ?? pill.approver)
+    : 'a senior reviewer';
+  const revision = knowledge.revision;
+  const proposedByMe = revision?.proposedById === state.user.id;
 
-  async function publish(item: Knowledge) {
+  async function run(path: string, method: string, body: object | undefined, message: string) {
     setBusy(true);
     setError('');
     try {
-      await api(`/knowledge/${encodeURIComponent(item.id)}/publish`, { method: 'POST' });
+      await api(path, { method, body: body ? JSON.stringify(body) : undefined });
       await refresh();
-      toast('Knowledge approved.');
+      setMode('view');
+      setNote('');
+      toast(message);
     } catch (failure) {
       setError(
         failure instanceof Error
           ? failure.message
-          : 'Could not approve this source. Please try again.',
+          : 'That could not be completed. Please try again.',
       );
     } finally {
       setBusy(false);
     }
   }
+  const base = `/knowledge/${encodeURIComponent(knowledge.id)}`;
 
   return (
     <Modal title="Knowledge detail" onClose={onClose} busy={busy} wide>
       <div className="modal-body">
         <div className="knowledge-detail-meta">
-          <span
-            className={`badge ${knowledge.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}
-          >
-            {knowledge.status === 'Approved' ? 'Approved' : 'Pending approval'}
-          </span>
+          <span className={`badge ${statusTone(knowledge)}`}>{statusLabel(knowledge)}</span>
           <span className="tag">{knowledge.sourceType}</span>
           <span className="tag">Singapore</span>
+          <span className="tag">Version {knowledge.version ?? 1}</span>
+          {knowledge.missedByAdvisor && <span className="tag tag-accent">Added by a reviewer</span>}
         </div>
         <h2>{knowledge.title}</h2>
         <p className="muted">
-          {state.skills.find((skill) => skill.id === knowledge.skillId)?.name ?? knowledge.category}{' '}
-          · {knowledge.author} · {dateLabel(knowledge.createdAt)}
+          {pill?.name ?? knowledge.category} · {knowledge.author} · {dateLabel(knowledge.createdAt)}
         </p>
         <div className="knowledge-detail-content">{knowledge.content}</div>
+        {knowledge.rule && (
+          <dl className="rule-card" aria-label="Structured rule">
+            {knowledge.rule.appliesWhen && (
+              <div>
+                <dt>Applies when</dt>
+                <dd>{knowledge.rule.appliesWhen}</dd>
+              </div>
+            )}
+            {knowledge.rule.check && (
+              <div>
+                <dt>Check</dt>
+                <dd>{knowledge.rule.check}</dd>
+              </div>
+            )}
+            {knowledge.rule.exceptions && (
+              <div>
+                <dt>Does not apply when</dt>
+                <dd>{knowledge.rule.exceptions}</dd>
+              </div>
+            )}
+            {knowledge.rule.evidence && (
+              <div>
+                <dt>Evidence to attach</dt>
+                <dd>{knowledge.rule.evidence}</dd>
+              </div>
+            )}
+          </dl>
+        )}
         <div className="knowledge-tags">
           {knowledge.tags.map((tag) => (
             <span className="tag" key={tag}>
@@ -258,11 +223,195 @@ export function KnowledgeDetailDialog({
             <span>{knowledge.sourceName}</span>
           )}
         </div>
+        {(knowledge.approvedBy || knowledge.retiredBy) && (
+          <p className="knowledge-provenance">
+            {knowledge.status === 'Retired'
+              ? `${knowledge.approvedAt ? 'Retired' : 'Declined'} by ${knowledge.retiredBy}${knowledge.retiredReason ? `: ${knowledge.retiredReason}` : ''}`
+              : `Approved by ${knowledge.approvedBy}${knowledge.approvedAt ? ` on ${dateLabel(knowledge.approvedAt)}` : ''}`}
+            {knowledge.versionNote &&
+            knowledge.status === 'Approved' &&
+            (knowledge.version ?? 1) > 1
+              ? ` · Changed because: ${knowledge.versionNote}`
+              : ''}
+          </p>
+        )}
+
+        {revision && (
+          <div className="revision-box" role="status">
+            <strong>Revision proposed by {revision.proposedBy}</strong>
+            <p>{revision.note}</p>
+            <div className="knowledge-detail-content revision-text">
+              {revision.title !== knowledge.title && (
+                <p>
+                  <b>Title:</b> {revision.title}
+                </p>
+              )}
+              {revision.content}
+            </div>
+            <p className="muted">The current version stays live until a second person approves.</p>
+            <div className="pill-actions">
+              {governs && (
+                <button
+                  className="btn btn-primary btn-small"
+                  disabled={busy || proposedByMe}
+                  title={proposedByMe ? 'A second person must approve a revision you proposed' : ''}
+                  onClick={() => run(`${base}/revision/approve`, 'POST', {}, 'Revision approved.')}
+                >
+                  <Check size={14} />
+                  Approve revision
+                </button>
+              )}
+              {(governs || proposedByMe) && (
+                <button
+                  className="btn btn-secondary btn-small"
+                  disabled={busy}
+                  onClick={() =>
+                    run(`${base}/revision`, 'DELETE', undefined, 'Revision discarded.')
+                  }
+                >
+                  <X size={14} />
+                  Discard revision
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {knowledge.history && knowledge.history.length > 0 && (
+          <details className="pill-history">
+            <summary>
+              <History size={15} /> Earlier versions{' '}
+              <span className="section-count">{knowledge.history.length}</span>
+            </summary>
+            <ol>
+              {knowledge.history.map((item) => (
+                <li key={item.version}>
+                  <div>
+                    <strong>Version {item.version}</strong>
+                    <span>{item.note}</span>
+                    <small>
+                      {item.changedBy} · {dateLabel(item.changedAt)}
+                    </small>
+                    <div className="knowledge-detail-content revision-text">{item.content}</div>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+
         {knowledge.status === 'Pending' && (
           <p className="form-hint">
             <ShieldCheck size={15} />
-            Manager approval is required before agents use this source.
+            {isAuthor
+              ? `A second person must approve this before agents use it: ${second}.`
+              : 'The pill owner or approver must approve this before agents use it.'}
           </p>
+        )}
+
+        {mode === 'edit' && (
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(
+                base,
+                'PUT',
+                { title, content, note },
+                knowledge.status === 'Approved'
+                  ? 'Revision proposed. A second person must approve it.'
+                  : 'Candidate updated.',
+              );
+            }}
+          >
+            <label className="field">
+              Title
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                maxLength={200}
+                required
+                disabled={busy}
+              />
+            </label>
+            <label className="field">
+              Content
+              <textarea
+                rows={6}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+            {knowledge.status === 'Approved' && (
+              <label className="field">
+                Why is this changing?
+                <textarea
+                  rows={2}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  required
+                  disabled={busy}
+                />
+              </label>
+            )}
+            <div className="inline-form-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => setMode('view')}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-primary btn-small" type="submit" disabled={busy}>
+                {knowledge.status === 'Approved' ? 'Propose revision' : 'Save'}
+              </button>
+            </div>
+          </form>
+        )}
+        {(mode === 'decline' || mode === 'retire') && (
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(
+                `${base}/${mode}`,
+                'POST',
+                { reason: note },
+                mode === 'retire' ? 'Knowledge retired.' : 'Candidate declined.',
+              );
+            }}
+          >
+            <label className="field">
+              {mode === 'retire' ? 'Why is this being retired?' : 'Why is this being declined?'}
+              <textarea
+                rows={2}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                required
+                disabled={busy}
+              />
+            </label>
+            <div className="inline-form-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={() => setMode('view')}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-small"
+                type="submit"
+                disabled={busy || !note.trim()}
+              >
+                {mode === 'retire' ? 'Retire' : 'Decline'}
+              </button>
+            </div>
+          </form>
         )}
         {error && (
           <p role="alert" className="inline-error">
@@ -274,10 +423,57 @@ export function KnowledgeDetailDialog({
         <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
           Close
         </button>
-        {knowledge.status === 'Pending' && state.user.role === 'manager' && (
-          <button className="btn btn-primary" disabled={busy} onClick={() => publish(knowledge)}>
-            {busy ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
-            Approve knowledge
+        {mode === 'view' && knowledge.status === 'Pending' && (
+          <>
+            {(isAuthor || governs) && (
+              <button className="btn btn-secondary" disabled={busy} onClick={() => setMode('edit')}>
+                <Pencil size={15} />
+                Edit
+              </button>
+            )}
+            {(isAuthor || governs) && (
+              <button
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => setMode('decline')}
+              >
+                <X size={15} />
+                {isAuthor && !governs ? 'Withdraw' : 'Decline'}
+              </button>
+            )}
+            {governs && state.user.role === 'manager' && (
+              <button
+                className="btn btn-primary"
+                disabled={busy || isAuthor}
+                title={isAuthor ? `A second person must approve this: ${second}` : ''}
+                onClick={() => run(`${base}/publish`, 'POST', undefined, 'Knowledge approved.')}
+              >
+                {busy ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
+                Approve knowledge
+              </button>
+            )}
+          </>
+        )}
+        {mode === 'view' && knowledge.status === 'Approved' && governs && (
+          <>
+            <button className="btn btn-secondary" disabled={busy} onClick={() => setMode('retire')}>
+              <Trash2 size={15} />
+              Retire
+            </button>
+            <button className="btn btn-primary" disabled={busy} onClick={() => setMode('edit')}>
+              <Pencil size={15} />
+              Propose edit
+            </button>
+          </>
+        )}
+        {mode === 'view' && knowledge.status === 'Retired' && knowledge.approvedAt && governs && (
+          <button
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => run(`${base}/restore`, 'POST', undefined, 'Knowledge restored.')}
+          >
+            <RotateCcw size={15} />
+            Restore
           </button>
         )}
       </div>
@@ -299,6 +495,17 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
   useEffect(() => {
     setQuery(initialQuery);
   }, [initialQuery]);
+  // The guided tour asks the page to show a pill or a tab without simulating clicks.
+  useEffect(() => {
+    const select = (event: Event) => setSelectedSkill((event as CustomEvent<string>).detail ?? '');
+    const open = (event: Event) => setTab((event as CustomEvent<Tab>).detail ?? 'All knowledge');
+    window.addEventListener('instill:select-pill', select);
+    window.addEventListener('instill:select-tab', open);
+    return () => {
+      window.removeEventListener('instill:select-pill', select);
+      window.removeEventListener('instill:select-tab', open);
+    };
+  }, []);
 
   const visible = useMemo(
     () =>
@@ -306,7 +513,9 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
         .filter((item) => {
           const search = query.trim().toLowerCase();
           return (
-            (!sourceTypes[tab] || item.sourceType === sourceTypes[tab]) &&
+            (tab === 'Awaiting approval'
+              ? item.status === 'Pending' || Boolean(item.revision)
+              : !sourceTypes[tab] || item.sourceType === sourceTypes[tab]) &&
             (!category || item.category === category) &&
             (!selectedSkill || item.skillId === selectedSkill) &&
             (!search ||
@@ -319,6 +528,12 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
     [state.knowledge, query, tab, category, selectedSkill],
   );
   const activeSkill = state.skills.find((skill) => skill.id === selectedSkill);
+  const tabCount = (item: Tab) =>
+    item === 'Awaiting approval'
+      ? state.knowledge.filter((entry) => entry.status === 'Pending' || entry.revision).length
+      : state.knowledge.filter(
+          (entry) => !sourceTypes[item] || entry.sourceType === sourceTypes[item],
+        ).length;
 
   return (
     <div className="knowledge-page">
@@ -327,7 +542,7 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
         <div className="heading-actions">
           <button className="btn btn-secondary" onClick={() => setSkillOpen(true)}>
             <Plus size={15} />
-            New skill
+            New pill
           </button>
           <button
             className="btn btn-primary"
@@ -342,12 +557,14 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
 
       <div className="section-heading">
         <h2>
-          Skills <span className="section-count">{state.skills.length}</span>
+          Intelligence pills <span className="section-count">{state.skills.length}</span>
         </h2>
       </div>
-      <div className="skill-grid">
+      <div className="skill-grid" data-tour="pill-grid">
         {state.skills.map((skill) => {
-          const count = state.knowledge.filter((item) => item.skillId === skill.id).length;
+          const count = state.knowledge.filter(
+            (item) => item.skillId === skill.id && item.status !== 'Retired',
+          ).length;
           return (
             <motion.button
               className={`skill-card${selectedSkill === skill.id ? ' selected' : ''}`}
@@ -376,6 +593,10 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
                 <span>
                   {count} {count === 1 ? 'entry' : 'entries'}
                 </span>
+                <span className="skill-version">
+                  {skill.version ? `v${skill.version}` : 'Unreleased'} ·{' '}
+                  {nameOf(state, skill.owner).split(' ')[0]}
+                </span>
               </div>
             </motion.button>
           );
@@ -383,13 +604,22 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
         {!state.skills.length && (
           <div className="panel empty-state">
             <Sparkles size={28} />
-            <h3>No skills yet</h3>
+            <h3>No pills yet</h3>
             <button className="btn btn-secondary" onClick={() => setSkillOpen(true)}>
-              New skill
+              New pill
             </button>
           </div>
         )}
       </div>
+      {activeSkill && (
+        <PillPanel
+          key={activeSkill.id}
+          state={state}
+          pill={activeSkill}
+          refresh={refresh}
+          toast={toast}
+        />
+      )}
 
       <div className="section-heading knowledge-library-heading">
         <h2>Library</h2>
@@ -401,15 +631,14 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
               key={item}
               className={`knowledge-tab${item === tab ? ' active' : ''}`}
               aria-pressed={item === tab}
+              data-tour={item === 'Awaiting approval' ? 'approval-tab' : undefined}
               onClick={() => setTab(item)}
             >
               {item}
-              <span className="tab-count">
-                {
-                  state.knowledge.filter(
-                    (entry) => !sourceTypes[item] || entry.sourceType === sourceTypes[item],
-                  ).length
-                }
+              <span
+                className={`tab-count${item === 'Awaiting approval' && tabCount(item) ? ' tab-count-alert' : ''}`}
+              >
+                {tabCount(item)}
               </span>
               {item === tab && (
                 <motion.span
@@ -494,6 +723,9 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
                   <span className="knowledge-subtitle">
                     {item.sourceType}
                     {item.decision ? ` · Suggestion ${item.decision}` : ''}
+                    {item.missedByAdvisor ? ' · Added by a reviewer' : ''}
+                    {(item.version ?? 1) > 1 ? ` · v${item.version}` : ''}
+                    {item.revision ? ' · Revision proposed' : ''}
                     {item.adpStatus ? ` · ${adpLabels[item.adpStatus]}` : ''}
                   </span>
                 </span>
@@ -503,11 +735,9 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
                 {item.category}
               </span>
               <span>
-                <span
-                  className={`badge ${item.status === 'Approved' ? 'badge-green' : 'badge-amber'}`}
-                >
+                <span className={`badge ${statusTone(item)}`}>
                   {item.status === 'Approved' && <Check size={11} />}
-                  {item.status === 'Approved' ? 'Approved' : 'Pending approval'}
+                  {statusLabel(item)}
                 </span>
               </span>
               <span className="knowledge-date">{dateLabel(item.createdAt)}</span>
@@ -517,11 +747,19 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
           {!visible.length && (
             <div className="empty-state">
               <FolderOpen size={30} />
-              <h3>{state.knowledge.length ? 'No matching knowledge' : 'No knowledge yet'}</h3>
+              <h3>
+                {tab === 'Awaiting approval'
+                  ? 'Nothing is waiting for approval'
+                  : state.knowledge.length
+                    ? 'No matching knowledge'
+                    : 'No knowledge yet'}
+              </h3>
               <p>
-                {state.knowledge.length
-                  ? 'Try a different search or category.'
-                  : 'Import a document or notes to get started.'}
+                {tab === 'Awaiting approval'
+                  ? 'Reviewer decisions and imports appear here until a second person approves them.'
+                  : state.knowledge.length
+                    ? 'Try a different search or category.'
+                    : 'Import a document or notes to get started.'}
               </p>
               {state.knowledge.length > 0 && (
                 <button
@@ -574,7 +812,7 @@ export function KnowledgePage({ state, refresh, toast, initialQuery = '' }: Page
           onCreated={async () => {
             await refresh();
             setSkillOpen(false);
-            toast('Skill created.');
+            toast('Pill created.');
           }}
         />
       )}
@@ -609,7 +847,7 @@ function ImportModal({
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim() || !skillId || (mode === 'file' ? !file : !content.trim())) {
-      setError('Add a title, select a skill, and provide a document or notes.');
+      setError('Add a title, select a pill, and provide a document or notes.');
       return;
     }
     setBusy(true);
@@ -710,7 +948,7 @@ function ImportModal({
             />
           </label>
           <label className="field">
-            Skill
+            Pill
             <select
               value={skillId}
               onChange={(event) => setSkillId(event.target.value)}
@@ -725,8 +963,8 @@ function ImportModal({
             </select>
           </label>
           <p className="form-hint">
-            <ShieldCheck size={16} />
-            Manager approval is required before agents use this source.
+            <ShieldCheck size={16} />A second person (the pill owner or approver) must approve this
+            before agents use it.
           </p>
           {error && (
             <p className="inline-error" role="alert">
@@ -772,20 +1010,18 @@ function NewSkillModal({
       await onCreated();
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : 'Could not create the skill. Please try again.',
+        failure instanceof Error ? failure.message : 'Could not create the pill. Please try again.',
       );
     } finally {
       setBusy(false);
     }
   }
   return (
-    <Modal title="New skill" onClose={onClose} busy={busy}>
+    <Modal title="New pill" onClose={onClose} busy={busy}>
       <form onSubmit={submit}>
         <div className="modal-body form-stack">
           <label className="field">
-            Skill name
+            Pill name
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -819,7 +1055,10 @@ function NewSkillModal({
               disabled={busy}
             />
           </label>
-          <p className="form-hint">Add and approve knowledge to activate this Singapore skill.</p>
+          <p className="form-hint">
+            A senior reviewer owns the pill and a second one approves it. Add and approve knowledge
+            to release v1.
+          </p>
           {error && (
             <p role="alert" className="inline-error">
               {error}
@@ -835,7 +1074,7 @@ function NewSkillModal({
             type="submit"
             disabled={busy || !name.trim() || !description.trim()}
           >
-            {busy ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}Create skill
+            {busy ? <LoaderCircle size={16} className="spin" /> : <Plus size={16} />}Create pill
           </button>
         </div>
       </form>

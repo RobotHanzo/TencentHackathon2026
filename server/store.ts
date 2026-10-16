@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import type { AppState } from '../shared/types.ts';
 import { seedWorkspace } from './seed.ts';
 import type { KnowledgeSyncJob } from './knowledge-sync.ts';
+import { normalizeWorkspace } from './governance.ts';
 
 export type Workspace = Omit<AppState, 'user' | 'aiMode' | 'integrations'> & {
   // Legacy messages without attribution remain in manager exports, not personal transcripts.
@@ -33,6 +34,7 @@ export class Store {
       payload: string;
     };
     const workspace = JSON.parse(row.payload) as Workspace;
+    normalizeWorkspace(workspace);
     // Refresh built-in branding in existing workspaces without changing authored content or IDs.
     const rebrandSource = (sourceName: string) =>
       sourceName.replace(/^Clearport internal SOP · /, 'Instill internal SOP · ');

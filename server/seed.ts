@@ -1,6 +1,7 @@
 import type { CaseRecord, Knowledge, Skill } from '../shared/types.ts';
 import type { Workspace } from './store.ts';
 import { localReview } from './advisor.ts';
+import { categoryDefaults, definitionOf, recordRelease } from './governance.ts';
 
 export function seedWorkspace(now: Date): Workspace {
   const date = now.toISOString();
@@ -14,51 +15,59 @@ export function seedWorkspace(now: Date): Workspace {
     { id: 'employee-chloe', name: 'Chloe Lim', role: 'employee' as const, initials: 'CL' },
     { id: 'manager-daniel', name: 'Daniel Wong', role: 'manager' as const, initials: 'DW' },
   ];
+  // Every built-in pill starts with a named owner, a different approver, a scope and escalation rules.
+  const pill = (
+    id: string,
+    name: string,
+    category: Skill['category'],
+    description: string,
+    tags: string[],
+  ): Skill => ({
+    id,
+    name,
+    category,
+    jurisdiction: 'Singapore',
+    tags,
+    status: 'Active',
+    updatedAt: date,
+    version: 0,
+    releases: [],
+    ...definitionOf({
+      ...categoryDefaults[category],
+      description,
+      owner: 'manager-sarah',
+      approver: 'manager-daniel',
+    }),
+  });
   const skills: Skill[] = [
-    {
-      id: 'electronics',
-      name: 'Electronics & telecoms',
-      category: 'Electronics',
-      jurisdiction: 'Singapore',
-      description:
-        'Route wireless and telecommunications equipment to applicable IMDA checks. Confirm product scope before requesting licence evidence.',
-      tags: ['IMDA', 'Wireless devices', 'TradeNet'],
-      status: 'Active',
-      updatedAt: date,
-    },
-    {
-      id: 'food',
-      name: 'Food & fresh produce',
-      category: 'Food & produce',
-      jurisdiction: 'Singapore',
-      description:
-        'Distinguish fresh produce from processed food and check the appropriate SFA importer licensing or registration route.',
-      tags: ['SFA', 'Fresh produce', 'Cold chain'],
-      status: 'Active',
-      updatedAt: date,
-    },
-    {
-      id: 'automotive',
-      name: 'Automotive & components',
-      category: 'Automotive',
-      jurisdiction: 'Singapore',
-      description:
-        'Review vehicle parts and wireless accessories, shipment evidence and cross-category requirements.',
-      tags: ['Vehicle parts', 'Wireless accessories', 'HS review'],
-      status: 'Active',
-      updatedAt: date,
-    },
-    {
-      id: 'general',
-      name: 'General cargo & declarations',
-      category: 'General cargo',
-      jurisdiction: 'Singapore',
-      description:
-        'Check Singapore import readiness, document consistency and carefully worded customer communications.',
-      tags: ['Singapore Customs', 'TradeNet', 'Customer communication'],
-      status: 'Active',
-      updatedAt: date,
-    },
+    pill(
+      'electronics',
+      'Electronics & telecoms',
+      'Electronics',
+      'Route wireless and telecommunications equipment to applicable IMDA checks. Confirm product scope before requesting licence evidence.',
+      ['IMDA', 'Wireless devices', 'TradeNet'],
+    ),
+    pill(
+      'food',
+      'Food & fresh produce',
+      'Food & produce',
+      'Distinguish fresh produce from processed food and check the appropriate SFA importer licensing or registration route.',
+      ['SFA', 'Fresh produce', 'Cold chain'],
+    ),
+    pill(
+      'automotive',
+      'Automotive & components',
+      'Automotive',
+      'Review vehicle parts and wireless accessories, shipment evidence and cross-category requirements.',
+      ['Vehicle parts', 'Wireless accessories', 'HS review'],
+    ),
+    pill(
+      'general',
+      'General cargo & declarations',
+      'General cargo',
+      'Check Singapore import readiness, document consistency and carefully worded customer communications.',
+      ['Singapore Customs', 'TradeNet', 'Customer communication'],
+    ),
   ];
   const entry = (
     id: string,
@@ -81,6 +90,10 @@ export function seedWorkspace(now: Date): Workspace {
     status: 'Approved',
     createdAt: date,
     author: 'Sarah Tan',
+    authorId: 'manager-sarah',
+    version: 1,
+    approvedBy: 'Daniel Wong',
+    approvedAt: date,
   });
   const knowledge = [
     entry(
@@ -275,6 +288,8 @@ export function seedWorkspace(now: Date): Workspace {
     comments: [],
     activity: [],
   };
+  for (const skill of skills)
+    recordRelease(workspace, skill, now, 'Sarah Tan', 'Initial release', 'Daniel Wong');
   for (const item of cases.filter((record) => record.status !== 'Draft'))
     item.review = localReview(workspace, item, now);
   const approved = cases.find((record) => record.status === 'Approved')!;

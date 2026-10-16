@@ -43,6 +43,7 @@ import type {
   Category,
   Comment,
   CommentAnchor,
+  Rule,
   Suggestion,
 } from '../shared/types';
 import { api } from './api';
@@ -50,6 +51,7 @@ import { KnowledgePage } from './Knowledge';
 import { ConsultPage } from './Consult';
 import { AnnotatedDocument, isCurrentAnchor } from './AnnotatedDocument';
 import { useMotionSettings } from './motion';
+import { Tour, markTourSeen, tourSeen, tourSteps, type AdpStatus, type TourStep } from './Tour';
 
 type Page = 'overview' | 'knowledge' | 'reviews' | 'consult' | 'activity' | 'team' | 'settings';
 const pageNames: Record<Page, string> = {
@@ -281,6 +283,10 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [knowledgeSearch, setKnowledgeSearch] = useState('');
+  const [tourOpen, setTourOpen] = useState(false);
+  const latest = useRef<AppState | null>(null);
+  const tourOpenedCase = useRef(false);
+  latest.current = state;
   const refresh = useCallback(async () => {
     const next = await api<AppState>('/state');
     setState(next);
@@ -353,6 +359,66 @@ export default function App() {
     setMobileNav(false);
     setProfileOpen(false);
   };
+  /** Take the visitor to whatever a tour step shows. */
+  const onTourStep = useCallback((step: TourStep) => {
+    if (step.closeCase) {
+      setSelectedCase(null);
+      tourOpenedCase.current = false;
+    }
+    if (step.page) {
+      setPage(step.page);
+      location.hash = step.page;
+      setMobileNav(false);
+      setProfileOpen(false);
+    }
+    if (step.openCase) {
+      const cases = latest.current?.cases ?? [];
+      const pick =
+        cases.find((c) => c.status === 'In review' && c.review) ?? cases.find((c) => c.review);
+      if (pick) {
+        setSelectedCase(pick.id);
+        tourOpenedCase.current = true;
+      }
+    }
+    if (step.pill !== undefined)
+      window.setTimeout(
+        () => window.dispatchEvent(new CustomEvent('instill:select-pill', { detail: step.pill })),
+        250,
+      );
+    if (step.tab)
+      window.setTimeout(
+        () => window.dispatchEvent(new CustomEvent('instill:select-tab', { detail: step.tab })),
+        250,
+      );
+  }, []);
+  const finishTour = useCallback(() => {
+    markTourSeen();
+    setTourOpen(false);
+    if (tourOpenedCase.current) setSelectedCase(null);
+    tourOpenedCase.current = false;
+  }, []);
+  const startTour = useCallback(async () => {
+    const current = latest.current;
+    // The tour walks through a senior reviewer's screens, so start as one.
+    if (current?.demoMode && current.user.role !== 'manager') {
+      try {
+        await api('/session', {
+          method: 'POST',
+          body: JSON.stringify({ userId: 'manager-sarah' }),
+        });
+        await refresh();
+      } catch {
+        // Carry on as the current user; manager-only steps then fall back to a centred card.
+      }
+    }
+    setTourOpen(true);
+  }, [refresh]);
+  const showWelcome = Boolean(state?.demoMode);
+  useEffect(() => {
+    if (!showWelcome || tourSeen()) return;
+    const timer = window.setTimeout(() => setTourOpen(true), 900);
+    return () => window.clearTimeout(timer);
+  }, [showWelcome]);
   useEffect(() => {
     const handler = () => {
       const next = location.hash.slice(1) as Page;
@@ -389,6 +455,38 @@ export default function App() {
       </div>
     );
   const reviewCount = state.cases.filter((c) => c.status === 'In review').length;
+  // What this person could approve now: others' candidates and revisions on pills they govern.
+  const approvalCount = state.knowledge.filter((item) => {
+    const pill = state.skills.find((skill) => skill.id === item.skillId);
+    if (!pill || state.user.role !== 'manager') return false;
+    if (pill.owner !== state.user.id && pill.approver !== state.user.id) return false;
+    const mine = item.authorId ? item.authorId === state.user.id : item.author === state.user.name;
+    return (
+      (item.status === 'Pending' && !mine) ||
+      Boolean(item.revision && item.revision.proposedById !== state.user.id)
+    );
+  }).length;
+  const integration = state.integrations;
+  const adpStatus: AdpStatus =
+    state.aiMode !== 'live'
+      ? {
+          tone: 'off',
+          text: 'Not connected on this deployment: the local rule-based advisor does this step instead.',
+        }
+      : integration?.connection === 'error'
+        ? {
+            tone: 'warn',
+            text: `Configured, but the last call failed: ${integration.lastError ?? 'see Settings'} The local advisor answers instead.`,
+          }
+        : integration?.connection === 'verified'
+          ? {
+              tone: 'ok',
+              text: `Connected on this deployment${integration.latencyMs ? ` · last call ${(integration.latencyMs / 1000).toFixed(1)} s` : ''}.`,
+            }
+          : {
+              tone: 'ok',
+              text: 'Configured on this deployment. Use Check connection in Settings to verify it.',
+            };
   const navItems = [
     { id: 'overview' as Page, icon: LayoutDashboard },
     { id: 'knowledge' as Page, icon: BookOpen },
@@ -448,6 +546,11 @@ export default function App() {
                 <span className="nav-count">{reviewCount}</span>
               )}
               {id === 'consult' && <span className="nav-ai">AI</span>}
+              {id === 'knowledge' && approvalCount > 0 && (
+                <span className="nav-count" title="Waiting for your approval">
+                  {approvalCount}
+                </span>
+              )}
               {page === id && <NavigationHighlight />}
             </button>
           ))}
@@ -525,6 +628,14 @@ export default function App() {
             </form>
             <span className="demo-label">Demo</span>
             <button
+              className="icon-button"
+              aria-label="Take the guided tour"
+              title="Take the guided tour"
+              onClick={() => void startTour()}
+            >
+              <CircleHelp size={19} />
+            </button>
+            <button
               className="icon-button notification-button"
               aria-label="View recent activity"
               onClick={() => navigate('activity')}
@@ -535,6 +646,7 @@ export default function App() {
             <div className="profile-wrap" ref={profileRef}>
               <button
                 className="avatar avatar-profile"
+                data-tour="persona"
                 aria-label="Switch demo user"
                 aria-expanded={profileOpen}
                 onClick={() => setProfileOpen(!profileOpen)}
@@ -616,6 +728,9 @@ export default function App() {
           {page === 'settings' && <SettingsPage state={state} refresh={refresh} toast={toast} />}
         </motion.main>
       </div>
+      {tourOpen && (
+        <Tour steps={tourSteps()} status={adpStatus} onStep={onTourStep} onFinish={finishTour} />
+      )}
       <AnimatePresence initial={false} mode="wait">
         {toastMessage && (
           <Toast key={toastMessage} message={toastMessage} onClose={() => setToastMessage('')} />
@@ -664,6 +779,7 @@ function Overview({
   const { reduced, transition } = useMotionSettings();
   const pending = state.cases.filter((c) => c.status === 'In review');
   const published = state.knowledge.filter((k) => k.status === 'Approved').length;
+  const awaiting = state.knowledge.filter((k) => k.status === 'Pending' || k.revision).length;
   const decisions = state.knowledge.filter((k) => k.sourceType === 'Decision').length;
   const urgent = pending.filter((c) =>
     c.review?.suggestions.some((s) => s.severity === 'critical' && s.decision === 'pending'),
@@ -692,7 +808,7 @@ function Overview({
           New document
         </motion.button>
       </div>
-      <div className="stats-grid">
+      <div className="stats-grid" data-tour="overview-stats">
         <Stat
           icon={<ClipboardCheck size={20} />}
           label="In review"
@@ -707,18 +823,25 @@ function Overview({
           order={1}
         />
         <Stat
+          icon={<ShieldCheck size={20} />}
+          label="Awaiting approval"
+          value={awaiting}
+          tone="amber"
+          order={2}
+        />
+        <Stat
           icon={<BookOpen size={20} />}
           label="Published sources"
           value={published}
           tone="blue"
-          order={2}
+          order={3}
         />
         <Stat
           icon={<CheckCheck size={20} />}
           label="Recorded decisions"
           value={decisions}
           tone="purple"
-          order={3}
+          order={4}
         />
       </div>
       <div className="dashboard-grid">
@@ -767,7 +890,7 @@ function Overview({
       <section className="specialist-section">
         <div className="section-heading">
           <h2>
-            Skills <span className="count-pill">{state.skills.length}</span>
+            Intelligence pills <span className="count-pill">{state.skills.length}</span>
           </h2>
           <button className="text-button" onClick={() => navigate('knowledge')}>
             Manage <ArrowRight size={14} />
@@ -798,6 +921,9 @@ function Overview({
                 <CategoryIcon category={skill.category} size={21} />
               </span>
               <strong>{skill.category}</strong>
+              <small className="specialist-version">
+                {skill.version ? `Release v${skill.version}` : 'Unreleased'}
+              </small>
               <div>
                 {
                   state.knowledge.filter((k) => k.skillId === skill.id && k.status === 'Approved')
@@ -1260,6 +1386,34 @@ function CaseDetail({
   const canEdit = manager || record.ownerId === state.user.id;
   const allDecided =
     !!record.review && record.review.suggestions.every((s) => s.decision !== 'pending');
+  const live = state.aiMode === 'live';
+  const modelLabel = state.integrations?.provider === 'adp' ? 'Tencent ADP' : 'Connected AI';
+  /** Ask the connected model (Tencent ADP when configured) to structure a reviewer's note. */
+  async function draftRule(
+    suggestionId: string | undefined,
+    decision: 'accepted' | 'rejected' | 'missed',
+    note: string,
+  ) {
+    const result = await api<RuleDraft>(`/cases/${record.id}/draft-rule`, {
+      method: 'POST',
+      body: JSON.stringify({ ...(suggestionId ? { suggestionId } : {}), decision, note }),
+    });
+    await refresh().catch(() => undefined);
+    return result;
+  }
+  async function addFinding(finding: {
+    title: string;
+    action: string;
+    comment: string;
+    severity: string;
+    rule?: Rule;
+  }) {
+    await act(
+      `/cases/${record.id}/findings`,
+      finding,
+      'Finding added. A second person approves it before reuse.',
+    );
+  }
   async function act(path: string, body?: object, message?: string) {
     setBusy(path);
     setError('');
@@ -1504,14 +1658,22 @@ function CaseDetail({
             </div>
           )}
         </section>
-        <aside className="review-pane">
+        <aside className="review-pane" data-tour="review-pane">
           <div className="review-pane-title">
             <span className="agent-small-icon">
               <Sparkles size={19} />
             </span>
             <div>
               <h3>Agent pre-review</h3>
-              <p>{record.review?.mode === 'live' ? 'Connected AI' : 'Local checks'}</p>
+              <p className="review-engine">
+                {record.review?.mode === 'live' ? (
+                  <>
+                    Rule checks + <span className="origin-chip origin-adp">{modelLabel}</span>
+                  </>
+                ) : (
+                  'Local rule checks'
+                )}
+              </p>
             </div>
           </div>
           {record.review ? (
@@ -1519,27 +1681,50 @@ function CaseDetail({
               <div className="review-summary">
                 <span>
                   {record.review.suggestions.length} findings · {record.review.skillIds.length}{' '}
-                  skills
+                  {record.review.skillIds.length === 1 ? 'pill' : 'pills'}
                 </span>
                 <details>
                   <summary>Review summary</summary>
                   <p>{record.review.summary}</p>
                 </details>
+                {!!record.review.pills?.length && (
+                  <p className="review-pills" aria-label="Intelligence pills used">
+                    {record.review.pills.map((pill) => (
+                      <span className="tag" key={pill.id}>
+                        {pill.name} · v{pill.version}
+                      </span>
+                    ))}
+                  </p>
+                )}
+                {live && record.review.mode !== 'live' && record.review.fallbackReason && (
+                  <p className="review-fallback" role="status">
+                    {modelLabel} was not used: {record.review.fallbackReason}
+                  </p>
+                )}
               </div>
               <div className="suggestion-list">
-                {record.review.suggestions.map((suggestion) => (
+                {record.review.suggestions.map((suggestion, index) => (
                   <SuggestionCard
                     key={suggestion.id}
                     suggestion={suggestion}
                     editable={manager && record.status === 'In review'}
                     busy={!!busy}
-                    onDecision={(decision, reason) =>
+                    modelLabel={modelLabel}
+                    live={live}
+                    tourTarget={
+                      suggestion.decision === 'pending' &&
+                      record.review!.suggestions.findIndex(
+                        (entry) => entry.decision === 'pending',
+                      ) === index
+                    }
+                    onDecision={(decision, reason, rule) =>
                       act(
                         `/cases/${record.id}/suggestions/${suggestion.id}`,
-                        { decision, comment: reason },
-                        'Decision saved',
+                        { decision, comment: reason, ...(rule ? { rule } : {}) },
+                        'Decision saved as candidate knowledge',
                       )
                     }
+                    onDraft={(id, decision, note) => draftRule(id, decision, note)}
                   />
                 ))}
               </div>
@@ -1552,6 +1737,15 @@ function CaseDetail({
               <h3>Ready to review</h3>
               <p>Check this document against approved knowledge.</p>
             </div>
+          )}
+          {record.status === 'In review' && manager && record.review && (
+            <AddFinding
+              busy={!!busy}
+              modelLabel={modelLabel}
+              live={live}
+              onAdd={addFinding}
+              onDraft={(note) => draftRule(undefined, 'missed', note)}
+            />
           )}
           {canEdit && (record.status === 'Draft' || record.status === 'Changes requested') && (
             <div className="review-actions">
@@ -1670,21 +1864,156 @@ function CaseDetail({
     </Modal>
   );
 }
+type RuleDraft = {
+  rule: Rule;
+  questions: string[];
+  mode: 'local' | 'live';
+  fallbackReason?: string;
+};
+const emptyRule: Rule = { appliesWhen: '', check: '', exceptions: '', evidence: '' };
+const ruleFields: { key: keyof Rule; label: string }[] = [
+  { key: 'appliesWhen', label: 'Applies when' },
+  { key: 'check', label: 'Check' },
+  { key: 'exceptions', label: 'Does not apply when' },
+  { key: 'evidence', label: 'Evidence to attach' },
+];
+const hasRule = (rule: Rule) => Object.values(rule).some((value) => value.trim());
+const originLabels = {
+  rule: 'Rule check',
+  knowledge: 'Past decision or document',
+  manager: 'Added by reviewer',
+  boundary: 'Pill boundary',
+} as const;
+
+/**
+ * Turns a reviewer's one-line reason into a reusable rule. The connected AI drafts the fields and
+ * asks follow-up questions; the reviewer edits everything before it is saved.
+ */
+function RuleEditor({
+  rule,
+  setRule,
+  canDraft,
+  onDraft,
+  disabled,
+  modelLabel,
+  live,
+}: {
+  rule: Rule;
+  setRule: (rule: Rule) => void;
+  canDraft: boolean;
+  onDraft: () => Promise<RuleDraft>;
+  disabled: boolean;
+  modelLabel: string;
+  live: boolean;
+}) {
+  const [drafting, setDrafting] = useState(false);
+  const [status, setStatus] = useState('');
+  const [questions, setQuestions] = useState<string[]>([]);
+  async function draft() {
+    setDrafting(true);
+    setStatus('');
+    try {
+      const result = await onDraft();
+      setRule(result.rule);
+      setQuestions(result.questions);
+      setStatus(
+        result.mode === 'live'
+          ? `Drafted by ${modelLabel}. Check every line before saving.`
+          : `Template only${result.fallbackReason ? `: ${result.fallbackReason}` : ' (no model connected)'}`,
+      );
+    } catch (failure) {
+      setStatus(failure instanceof Error ? failure.message : 'The draft could not be created.');
+    } finally {
+      setDrafting(false);
+    }
+  }
+  return (
+    <section className="rule-editor" aria-label="Reusable rule">
+      <div className="rule-editor-head">
+        <span>
+          <strong>Make this reusable</strong>
+          <small>Edit each line; it is saved with your decision.</small>
+        </span>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          disabled={drafting || disabled || !canDraft}
+          title={canDraft ? '' : 'Write a short reason first'}
+          onClick={draft}
+        >
+          {drafting ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+          {live ? `Draft with ${modelLabel}` : 'Draft from template'}
+        </button>
+      </div>
+      {status && (
+        <p className="rule-status" role="status">
+          {status}
+        </p>
+      )}
+      {questions.length > 0 && (
+        <ul className="rule-questions" aria-label="Questions to answer">
+          {questions.map((question) => (
+            <li key={question}>{question}</li>
+          ))}
+        </ul>
+      )}
+      {ruleFields.map(({ key, label }) => (
+        <label className="rule-field" key={key}>
+          <span>{label}</span>
+          <textarea
+            rows={2}
+            value={rule[key]}
+            maxLength={600}
+            disabled={disabled}
+            onChange={(event) => setRule({ ...rule, [key]: event.target.value })}
+          />
+        </label>
+      ))}
+    </section>
+  );
+}
+
 function SuggestionCard({
   suggestion: s,
   editable,
   busy,
+  modelLabel,
+  live,
+  tourTarget,
   onDecision,
+  onDraft,
 }: {
   suggestion: Suggestion;
   editable: boolean;
   busy: boolean;
-  onDecision: (decision: 'accepted' | 'rejected', reason: string) => Promise<void>;
+  modelLabel: string;
+  live: boolean;
+  tourTarget?: boolean;
+  onDecision: (decision: 'accepted' | 'rejected', reason: string, rule?: Rule) => Promise<void>;
+  onDraft: (
+    suggestionId: string,
+    decision: 'accepted' | 'rejected',
+    note: string,
+  ) => Promise<RuleDraft>;
 }) {
   const [reason, setReason] = useState('');
+  const [ruleOpen, setRuleOpen] = useState(false);
+  const [rule, setRule] = useState<Rule>(emptyRule);
+  const [intent, setIntent] = useState<'accepted' | 'rejected'>('accepted');
   const { reduced, transition } = useMotionSettings();
+  const origin =
+    s.origin === 'model'
+      ? { label: modelLabel === 'Tencent ADP' ? 'Tencent ADP' : 'Connected AI', adp: true }
+      : s.origin
+        ? { label: originLabels[s.origin], adp: false }
+        : null;
+  const submit = (decision: 'accepted' | 'rejected') =>
+    onDecision(decision, reason, ruleOpen && hasRule(rule) ? rule : undefined);
   return (
-    <article className={`suggestion-card severity-${s.severity}`}>
+    <article
+      className={`suggestion-card severity-${s.severity}`}
+      data-tour={s.origin === 'boundary' ? 'boundary' : undefined}
+    >
       <div className="suggestion-title">
         <span>
           {s.severity === 'critical' ? (
@@ -1700,17 +2029,22 @@ function SuggestionCard({
               ? 'Check'
               : 'Reference'}
         </span>
-        {s.decision !== 'pending' && (
-          <motion.span
-            key={s.decision}
-            className={`badge ${s.decision === 'accepted' ? 'badge-green' : 'badge-neutral'}`}
-            initial={reduced ? false : { opacity: 0, scale: 0.92 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={transition}
-          >
-            {s.decision === 'accepted' ? 'Accepted' : 'Rejected'}
-          </motion.span>
-        )}
+        <span className="suggestion-badges">
+          {origin && (
+            <span className={`origin-chip${origin.adp ? ' origin-adp' : ''}`}>{origin.label}</span>
+          )}
+          {s.decision !== 'pending' && (
+            <motion.span
+              key={s.decision}
+              className={`badge ${s.decision === 'accepted' ? 'badge-green' : 'badge-neutral'}`}
+              initial={reduced ? false : { opacity: 0, scale: 0.92 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={transition}
+            >
+              {s.decision === 'accepted' ? 'Accepted' : 'Rejected'}
+            </motion.span>
+          )}
+        </span>
       </div>
       <h4>{s.title}</h4>
       <p>{s.detail}</p>
@@ -1726,7 +2060,10 @@ function SuggestionCard({
           </summary>
           {s.citations.map((c) => (
             <div key={c.id}>
-              <strong>{c.title}</strong>
+              <strong>
+                {c.title}
+                {c.version ? ` · v${c.version}` : ''}
+              </strong>
               <p>{c.excerpt}</p>
               <small>{c.sourceName}</small>
             </div>
@@ -1734,7 +2071,7 @@ function SuggestionCard({
         </details>
       )}
       {s.decision === 'pending' && editable && (
-        <div className="suggestion-feedback">
+        <div className="suggestion-feedback" data-tour={tourTarget ? 'decision' : undefined}>
           <textarea
             rows={2}
             aria-label={`Reason for ${s.title}`}
@@ -1742,11 +2079,50 @@ function SuggestionCard({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
+          <button
+            type="button"
+            className="rule-toggle"
+            aria-expanded={ruleOpen}
+            onClick={() => setRuleOpen(!ruleOpen)}
+          >
+            <Sparkles size={13} />
+            {ruleOpen ? 'Hide the reusable rule' : 'Make this a reusable rule'}
+            {live && !ruleOpen && <span className="origin-chip origin-adp">{modelLabel}</span>}
+          </button>
+          {ruleOpen && (
+            <>
+              <span className="rule-intent" role="group" aria-label="Draft the rule for">
+                <button
+                  type="button"
+                  aria-pressed={intent === 'accepted'}
+                  onClick={() => setIntent('accepted')}
+                >
+                  I am accepting
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={intent === 'rejected'}
+                  onClick={() => setIntent('rejected')}
+                >
+                  I am rejecting
+                </button>
+              </span>
+              <RuleEditor
+                rule={rule}
+                setRule={setRule}
+                canDraft={Boolean(reason.trim())}
+                disabled={busy}
+                modelLabel={modelLabel}
+                live={live}
+                onDraft={() => onDraft(s.id, intent, reason)}
+              />
+            </>
+          )}
           <div>
             <button
               className="btn btn-secondary btn-small"
               disabled={busy || !reason.trim()}
-              onClick={() => onDecision('rejected', reason)}
+              onClick={() => submit('rejected')}
             >
               <X size={14} />
               Reject advice
@@ -1754,7 +2130,7 @@ function SuggestionCard({
             <button
               className="btn btn-primary btn-small"
               disabled={busy}
-              onClick={() => onDecision('accepted', reason)}
+              onClick={() => submit('accepted')}
             >
               <Check size={14} />
               Accept advice
@@ -1766,13 +2142,161 @@ function SuggestionCard({
         <div className="decision-note">
           <span>{s.decidedBy || 'Senior reviewer'}</span>
           <p>{s.comment || 'Suggestion accepted.'}</p>
+          {s.rule && (
+            <dl className="rule-card">
+              {ruleFields
+                .filter(({ key }) => s.rule![key])
+                .map(({ key, label }) => (
+                  <div key={key}>
+                    <dt>{label}</dt>
+                    <dd>{s.rule![key]}</dd>
+                  </div>
+                ))}
+            </dl>
+          )}
           <small>
             <BookOpen size={11} />
-            Saved to knowledge
+            Candidate knowledge · awaiting a second approver
           </small>
         </div>
       )}
     </article>
+  );
+}
+
+/** A reviewer records an issue the advisor did not raise; it becomes candidate knowledge. */
+function AddFinding({
+  busy,
+  modelLabel,
+  live,
+  onAdd,
+  onDraft,
+}: {
+  busy: boolean;
+  modelLabel: string;
+  live: boolean;
+  onAdd: (finding: {
+    title: string;
+    action: string;
+    comment: string;
+    severity: string;
+    rule?: Rule;
+  }) => Promise<void>;
+  onDraft: (note: string) => Promise<RuleDraft>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [action, setAction] = useState('');
+  const [comment, setComment] = useState('');
+  const [severity, setSeverity] = useState('warning');
+  const [rule, setRule] = useState<Rule>(emptyRule);
+  const [ruleOpen, setRuleOpen] = useState(false);
+  return (
+    <div className="add-finding">
+      <button
+        type="button"
+        className="btn btn-secondary full-width"
+        data-tour="missed-finding"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Plus size={15} />
+        Add a finding the advisor missed
+      </button>
+      {open && (
+        <form
+          className="add-finding-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            await onAdd({
+              title,
+              action,
+              comment,
+              severity,
+              ...(ruleOpen && hasRule(rule) ? { rule } : {}),
+            });
+            setTitle('');
+            setAction('');
+            setComment('');
+            setRule(emptyRule);
+            setRuleOpen(false);
+            setOpen(false);
+          }}
+        >
+          <label className="field">
+            What did the advisor miss?
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              maxLength={200}
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            What should be checked?
+            <input
+              value={action}
+              onChange={(e) => setAction(e.target.value)}
+              required
+              maxLength={1500}
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            Why does it matter?
+            <textarea
+              rows={2}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              required
+              maxLength={4000}
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            Severity
+            <select value={severity} onChange={(e) => setSeverity(e.target.value)} disabled={busy}>
+              <option value="info">Reference</option>
+              <option value="warning">Check</option>
+              <option value="critical">Priority</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="rule-toggle"
+            aria-expanded={ruleOpen}
+            onClick={() => setRuleOpen(!ruleOpen)}
+          >
+            <Sparkles size={13} />
+            {ruleOpen ? 'Hide the reusable rule' : 'Make this a reusable rule'}
+            {live && !ruleOpen && <span className="origin-chip origin-adp">{modelLabel}</span>}
+          </button>
+          {ruleOpen && (
+            <RuleEditor
+              rule={rule}
+              setRule={setRule}
+              canDraft={Boolean(comment.trim() || title.trim())}
+              disabled={busy}
+              modelLabel={modelLabel}
+              live={live}
+              onDraft={() => onDraft(`${title}. ${action}. ${comment}`)}
+            />
+          )}
+          <p className="form-hint">
+            <ShieldCheck size={14} />
+            Saved as candidate knowledge. A second person approves it before agents use it.
+          </p>
+          <button
+            className="btn btn-primary"
+            disabled={busy || !title.trim() || !action.trim() || !comment.trim()}
+          >
+            <Check size={15} />
+            Add finding
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -1932,7 +2456,7 @@ function SettingsPage({
     setChecking(true);
     try {
       await api('/integrations/check', { method: 'POST' });
-      toast('Connection verified with an approved source.');
+      toast('Connection verified: the model answered and cited an approved source.');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Connection check failed.');
     } finally {
@@ -1987,7 +2511,7 @@ function SettingsPage({
             </div>
           </dl>
         </section>
-        <section className="panel settings-panel">
+        <section className="panel settings-panel settings-advisor" data-tour="adp-panel">
           <div className="section-heading">
             <h2>Advisor</h2>
             <Sparkles size={19} />
@@ -2009,8 +2533,42 @@ function SettingsPage({
           </div>
           <p>
             {state.aiMode === 'live'
-              ? 'Approved sources. Local fallback when unavailable.'
+              ? 'Approved sources only. The local advisor answers whenever the model is unavailable.'
               : 'Rule-based checks and knowledge search. No model connected.'}
+          </p>
+          {state.aiMode === 'live' && integration?.connection === 'verified' && (
+            <p className="settings-detail" role="status">
+              Last call succeeded
+              {integration.latencyMs ? ` in ${(integration.latencyMs / 1000).toFixed(1)} s` : ''}
+              {integration.checkedAt ? ` · ${timeLabel(integration.checkedAt)}` : ''}.
+            </p>
+          )}
+          {state.aiMode === 'live' && integration?.lastError && (
+            <p className="settings-error" role="alert">
+              <strong>Last failure:</strong> {integration.lastError}
+              {integration.checkedAt ? ` (${timeLabel(integration.checkedAt)})` : ''}
+            </p>
+          )}
+          <h3 className="settings-subhead">
+            Where {providerName === 'Local advisor' ? 'a model' : providerName} is used
+          </h3>
+          <ul className="settings-uses">
+            <li>
+              <strong>Pre-review.</strong> Adds observations the rules miss and judges which
+              recorded decisions apply to a case.
+            </li>
+            <li>
+              <strong>Rule drafting.</strong> Turns a reviewer&apos;s one-line reason into a
+              structured rule and asks follow-up questions.
+            </li>
+            <li>
+              <strong>Ask an agent.</strong> Answers questions from approved knowledge, citing it.
+            </li>
+          </ul>
+          <p className="form-hint">
+            <ShieldCheck size={14} />
+            Rule checks, scope limits and escalation always run locally, and a model answer with an
+            unknown citation is discarded.
           </p>
           {state.aiMode === 'live' && state.user.role === 'manager' && (
             <button className="btn btn-secondary" onClick={checkConnection} disabled={checking}>

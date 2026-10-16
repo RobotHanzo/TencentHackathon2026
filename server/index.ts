@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createApp } from './app.ts';
+import { probeEndpoint } from './network.ts';
 
 // Access logs go to stdout, so `docker logs` shows them. Set ACCESS_LOG=false to turn them off.
 const service = createApp({
@@ -14,6 +15,19 @@ const server = service.app.listen(port, host, () => {
     'Singapore workspace · internal approval only · no external declarations or messages are sent',
   );
 });
+// Say in the container log whether this host can reach the AI provider, so a network problem is
+// visible at startup instead of surfacing later as a vague fallback. No request is sent.
+const target = service.aiEndpoint();
+if (target)
+  probeEndpoint(target)
+    .then((result) =>
+      console.log(
+        result.ok
+          ? `[ai] ${service.provider} endpoint ${result.host} is reachable (DNS ${result.dnsMs} ms${result.tlsMs === undefined ? '' : `, TLS ${result.tlsMs} ms`})`
+          : `[ai] ${service.provider} endpoint is NOT reachable: ${result.reason}`,
+      ),
+    )
+    .catch(() => undefined);
 function shutdown() {
   server.close(() => {
     service.close();

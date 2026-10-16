@@ -117,6 +117,7 @@ function Message({
 }) {
   const assistant = message.role === 'assistant';
   const { reveal } = useMotionSettings();
+  const engine = state.integrations?.provider === 'adp' ? 'Tencent ADP' : 'Connected AI';
   return (
     <motion.article
       className={`chat-message ${assistant ? 'assistant' : 'user'}`}
@@ -130,15 +131,16 @@ function Message({
       <div className="chat-message-body">
         <div className="chat-message-meta">
           <strong
-            title={
-              assistant ? (message.mode === 'live' ? 'Connected AI' : 'Local advisor') : undefined
-            }
+            title={assistant ? (message.mode === 'live' ? engine : 'Local advisor') : undefined}
           >
             {assistant ? 'Agent' : 'You'}
           </strong>
-          {assistant && (
-            <span className="badge badge-neutral">{message.mode === 'live' ? 'AI' : 'Local'}</span>
-          )}
+          {assistant &&
+            (message.mode === 'live' ? (
+              <span className="origin-chip origin-adp">{engine}</span>
+            ) : (
+              <span className="badge badge-neutral">Local</span>
+            ))}
           <span>
             {new Date(message.createdAt).toLocaleTimeString('en-SG', {
               hour: '2-digit',
@@ -158,6 +160,14 @@ function Message({
           </div>
         )}
         <div className="chat-message-content">{message.content}</div>
+        {assistant &&
+          state.aiMode === 'live' &&
+          message.mode === 'local' &&
+          message.fallbackReason && (
+            <p className="chat-fallback" role="note">
+              {engine} was not used for this answer: {message.fallbackReason}
+            </p>
+          )}
         {message.citations.length > 0 && (
           <div className="chat-citations">
             <span className="muted">Sources ({message.citations.length})</span>
@@ -247,7 +257,11 @@ export function ConsultPage({ state, refresh, toast, initialQuery = '' }: PagePr
         <h1>Ask an agent</h1>
         <span className="badge badge-green consult-mode" title="Latest response mode">
           <span className="status-dot" />
-          {responseMode === 'live' ? 'Connected AI' : 'Local advisor'}
+          {responseMode === 'live'
+            ? state.integrations?.provider === 'adp'
+              ? 'Tencent ADP'
+              : 'Connected AI'
+            : 'Local advisor'}
         </span>
       </div>
       <div className={`consult-shell${hasMessages ? ' has-messages' : ''}`}>
@@ -333,6 +347,7 @@ export function ConsultPage({ state, refresh, toast, initialQuery = '' }: PagePr
           )}
           <form
             className="consult-composer"
+            data-tour="consult"
             onSubmit={(event) => {
               event.preventDefault();
               void send();

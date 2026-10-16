@@ -13,10 +13,26 @@ import type {
   CommentAnchor,
   Knowledge,
   IntegrationState,
+  PillBoundary,
+  PillDefinition,
+  PillEscalation,
+  Rule,
+  Skill,
+  Suggestion,
   User,
 } from '../shared/types.ts';
 import { Store, type Workspace } from './store.ts';
-import { answerQuestion, liveConfigured, reviewCase, type AIConfig } from './advisor.ts';
+import { answerQuestion, draftRule, liveConfigured, reviewCase, type AIConfig } from './advisor.ts';
+import { ADP_ENDPOINT, AiError } from './adp.ts';
+import { probeEndpoint } from './network.ts';
+import {
+  definitionOf,
+  isGovernor,
+  nextKnowledgeVersion,
+  recordRelease,
+  rollbackPill,
+  userName,
+} from './governance.ts';
 import { KnowledgeSync, type KnowledgeClient } from './knowledge-sync.ts';
 import { TencentKnowledgeClient } from './tencent-knowledge.ts';
 import { OriginalStorage } from './object-storage.ts';
@@ -105,6 +121,77 @@ function commentAnchor(value: unknown, item: CaseRecord): CommentAnchor | undefi
   return { start, end, quote, revision };
 }
 
+/** A list of short, non-empty strings; blank entries are dropped. */
+function textList(value: unknown, label: string, maxItems = 12, maxLength = 300): string[] {
+  if (!Array.isArray(value)) return fail(400, `${label} must be a list.`);
+  const items = value
+    .map((entry) => string(entry, label, maxLength))
+    .filter((entry) => entry.length > 0);
+  if (items.length > maxItems) fail(400, `${label} can have at most ${maxItems} entries.`);
+  return items;
+}
+const keywordList = (value: unknown, label: string) =>
+  textList(value ?? [], label, 12, 40).map((entry) => entry.toLowerCase());
+function boundaries(value: unknown): PillBoundary[] {
+  if (!Array.isArray(value)) return fail(400, 'Out-of-scope topics must be a list.');
+  if (value.length > 12) fail(400, 'Out-of-scope topics can have at most 12 entries.');
+  return value
+    .map((entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      return {
+        label: string(item.label, 'Out-of-scope topic', 200),
+        keywords: keywordList(item.keywords, 'Out-of-scope keywords'),
+      };
+    })
+    .filter((entry) => entry.label);
+}
+function escalations(value: unknown): PillEscalation[] {
+  if (!Array.isArray(value)) return fail(400, 'Escalation triggers must be a list.');
+  if (value.length > 12) fail(400, 'Escalation triggers can have at most 12 entries.');
+  return value
+    .map((entry) => {
+      const item = (entry ?? {}) as Record<string, unknown>;
+      return {
+        trigger: string(item.trigger, 'Escalation trigger', 200),
+        route: string(item.route, 'Escalation route', 300),
+        keywords: keywordList(item.keywords, 'Escalation keywords'),
+        ...(item.onCritical === true ? { onCritical: true } : {}),
+      };
+    })
+    .filter((entry) => entry.trigger);
+}
+/** Structured reasoning is optional; empty fields are fine, oversized ones are not. */
+function ruleInput(value: unknown): Rule | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value))
+    return fail(400, 'The rule must be an object.');
+  const item = value as Record<string, unknown>;
+  const rule = {
+    appliesWhen: string(item.appliesWhen, 'Applies when', 600),
+    check: string(item.check, 'Check', 600),
+    exceptions: string(item.exceptions, 'Exceptions', 600),
+    evidence: string(item.evidence, 'Evidence', 600),
+  };
+  return Object.values(rule).some(Boolean) ? rule : undefined;
+}
+const ruleLines = (rule?: Rule) =>
+  rule
+    ? [
+        rule.appliesWhen && `Applies when: ${rule.appliesWhen}`,
+        rule.check && `Check: ${rule.check}`,
+        rule.exceptions && `Does not apply when: ${rule.exceptions}`,
+        rule.evidence && `Evidence to attach: ${rule.evidence}`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : '';
+const standardEscalation = (): PillEscalation => ({
+  trigger: 'A critical finding is raised',
+  route: 'The pill owner decides whether the document may proceed',
+  keywords: [],
+  onCritical: true,
+});
+
 export interface AppOptions {
   dbPath?: string;
   demoMode?: boolean;
@@ -173,30 +260,62 @@ export function createApp(options: AppOptions = {}) {
   const accessPassword = options.accessPassword ?? process.env.APP_ACCESS_PASSWORD;
   if (!demoMode && (!accessPassword || accessPassword.length < 12))
     throw new Error('Non-demo mode requires an APP_ACCESS_PASSWORD of at least 12 characters.');
-  const ai = options.ai ?? {
+  const timeoutSetting = Number(process.env.AI_TIMEOUT_MS);
+  const aiSettings: AIConfig = options.ai ?? {
     provider: (process.env.AI_PROVIDER?.trim() || undefined) as AIConfig['provider'],
     baseUrl: process.env.AI_BASE_URL,
     apiKey: process.env.AI_API_KEY,
     model: process.env.AI_MODEL,
     adpAppKey: process.env.ADP_APP_KEY,
     adpEndpoint: process.env.ADP_ENDPOINT,
+    ...(Number.isFinite(timeoutSetting) && timeoutSetting > 0 ? { timeoutMs: timeoutSetting } : {}),
   };
-  if (ai.provider !== undefined && !['local', 'openai', 'adp'].includes(ai.provider))
+  if (
+    aiSettings.provider !== undefined &&
+    !['local', 'openai', 'adp'].includes(aiSettings.provider)
+  )
     throw new Error('AI_PROVIDER must be local, openai or adp.');
-  if (ai.provider === 'adp' && !ai.adpAppKey?.trim())
+  if (aiSettings.provider === 'adp' && !aiSettings.adpAppKey?.trim())
     throw new Error('AI_PROVIDER=adp requires ADP_APP_KEY.');
-  if (ai.provider === 'openai' && !(ai.baseUrl && ai.apiKey && ai.model))
+  if (
+    aiSettings.provider === 'openai' &&
+    !(aiSettings.baseUrl && aiSettings.apiKey && aiSettings.model)
+  )
     throw new Error('AI_PROVIDER=openai requires AI_BASE_URL, AI_API_KEY and AI_MODEL.');
+  // A public demo can be clicked by anyone, so cap provider calls to protect the Tencent allowance.
+  const hourlyBudget = Number(process.env.AI_CALLS_PER_HOUR ?? 120);
+  const recentCalls: number[] = [];
+  const spendingGuard = () => {
+    const cutoff = Date.now() - 3_600_000;
+    while (recentCalls.length && recentCalls[0] < cutoff) recentCalls.shift();
+    if (Number.isFinite(hourlyBudget) && recentCalls.length >= hourlyBudget)
+      throw new AiError(
+        `The hourly AI call budget (${hourlyBudget}) is used up; the local advisor answers until it resets.`,
+      );
+    recentCalls.push(Date.now());
+  };
+  const ai: AIConfig = { ...aiSettings, beforeCall: aiSettings.beforeCall ?? spendingGuard };
   const provider = ai.provider ?? (ai.adpAppKey ? 'adp' : liveConfigured(ai) ? 'openai' : 'local');
   const connection: IntegrationState = {
     provider,
     connection: provider === 'local' ? 'local' : 'configured',
   };
-  const noteConnection = (mode: 'local' | 'live') => {
+  const noteConnection = (mode: 'local' | 'live', reason?: string, elapsedMs?: number) => {
     if (provider === 'local') return;
     connection.connection = mode === 'live' ? 'verified' : 'error';
     connection.checkedAt = now().toISOString();
+    if (mode === 'live') {
+      delete connection.lastError;
+      if (elapsedMs !== undefined) connection.latencyMs = elapsedMs;
+    } else if (reason) connection.lastError = reason;
   };
+  /** The provider URL this deployment talks to, for reachability checks. */
+  const aiEndpoint = () =>
+    provider === 'adp'
+      ? ai.adpEndpoint || ADP_ENDPOINT
+      : provider === 'openai'
+        ? ai.baseUrl
+        : undefined;
   const cookieSecure = options.cookieSecure ?? process.env.APP_COOKIE_SECURE === 'true';
   let knowledgeConfig = options.knowledge;
   const originals =
@@ -338,6 +457,20 @@ export function createApp(options: AppOptions = {}) {
   };
   const record = (workspace: Workspace, id: string): CaseRecord =>
     workspace.cases.find((item) => item.id === id) ?? fail(404, 'Case not found.');
+  const pillOf = (workspace: Workspace, id: string): Skill =>
+    workspace.skills.find((item) => item.id === id) ?? fail(404, 'Intelligence pill not found.');
+  const entryOf = (workspace: Workspace, id: string): Knowledge =>
+    workspace.knowledge.find((item) => item.id === id) ?? fail(404, 'Knowledge entry not found.');
+  /** Only a pill's owner or approver may change what it knows or what it is approved to do. */
+  const governor = (workspace: Workspace, skill: Skill, res: Response) => {
+    if (!isGovernor(skill, user(res)))
+      fail(
+        403,
+        `Only the pill owner (${userName(workspace, skill.owner)}) or approver (${userName(workspace, skill.approver)}) can do this.`,
+      );
+  };
+  const isAuthor = (item: Knowledge, res: Response) =>
+    item.authorId ? item.authorId === user(res).id : item.author === user(res).name;
   const editable = (item: CaseRecord, res: Response) => {
     if (user(res).role !== 'manager' && item.ownerId !== user(res).id)
       fail(403, 'You can edit only cases you own.');
@@ -386,6 +519,7 @@ export function createApp(options: AppOptions = {}) {
       })),
       user: user(res),
       aiMode: liveConfigured(ai) ? 'live' : 'local',
+      demoMode,
       integrations: { ...connection, knowledge: knowledgeSync?.summary() },
     };
     res.json(state);
@@ -459,7 +593,7 @@ export function createApp(options: AppOptions = {}) {
       conversationId: randomUUID(),
       documentMap: knowledgeSync?.documentMap(),
     });
-    noteConnection(review.mode);
+    noteConnection(review.mode, review.fallbackReason);
     res.json(
       store.mutate((workspace) => {
         const item = record(workspace, req.params.id);
@@ -503,11 +637,77 @@ export function createApp(options: AppOptions = {}) {
       }),
     ),
   );
+  /** Record a reviewer's reasoning as a candidate; it becomes usable only after a second person approves it. */
+  const candidate = (
+    workspace: Workspace,
+    res: Response,
+    item: CaseRecord,
+    input: {
+      title: string;
+      lead: string;
+      body: string;
+      comment: string;
+      decision: 'accepted' | 'rejected';
+      missed?: boolean;
+      rule?: Rule;
+      skillId?: string;
+    },
+  ) => {
+    const skill =
+      workspace.skills.find((entry) => entry.id === input.skillId) ??
+      workspace.skills.find(
+        (entry) => entry.category === item.category && entry.status === 'Active',
+      ) ??
+      workspace.skills.find((entry) => entry.category === item.category) ??
+      workspace.skills[0];
+    const knowledge: Knowledge = {
+      id: randomUUID(),
+      title: input.title,
+      content: [
+        input.lead,
+        input.body,
+        ruleLines(input.rule),
+        `Reviewer rationale: ${input.comment || 'Accepted by senior reviewer without additional comment.'}`,
+        `Case context: ${item.title}; ${item.category}; ${item.documentType}. Internal precedent only; verify applicability to each new shipment.`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      category: item.category,
+      jurisdiction: 'Singapore',
+      skillId: skill.id,
+      sourceType: 'Decision',
+      sourceName: `${user(res).name} · ${item.reference}`,
+      status: 'Pending',
+      createdAt: now().toISOString(),
+      author: user(res).name,
+      authorId: user(res).id,
+      version: 1,
+      tags: [
+        input.decision,
+        item.category,
+        'Senior review',
+        ...(input.missed ? ['Missed by advisor'] : []),
+      ],
+      decision: input.decision,
+      caseId: item.id,
+      ...(input.missed ? { missedByAdvisor: true } : {}),
+      ...(input.rule ? { rule: input.rule } : {}),
+    };
+    workspace.knowledge.unshift(knowledge);
+    return { knowledge, skill };
+  };
+  /** The other accountable person, who must approve what this user just recorded. */
+  const awaiting = (workspace: Workspace, skill: Skill, res: Response) =>
+    userName(
+      workspace,
+      [skill.owner, skill.approver].find((id) => id !== user(res).id) ?? skill.approver,
+    );
   app.post('/api/cases/:id/suggestions/:suggestionId', (req, res) => {
     manager(res);
     const decision = req.body?.decision;
     if (!['accepted', 'rejected'].includes(decision)) fail(400, 'Choose accepted or rejected.');
     const comment = string(req.body?.comment, 'Review comment', 4000, decision === 'rejected');
+    const rule = ruleInput(req.body?.rule);
     res.json(
       store.mutate((workspace) => {
         const item = record(workspace, req.params.id);
@@ -525,39 +725,106 @@ export function createApp(options: AppOptions = {}) {
         suggestion.decision = decision;
         suggestion.comment = comment;
         suggestion.decidedBy = user(res).name;
+        if (rule) suggestion.rule = rule;
         updated(item);
-        const skill = workspace.skills.find((entry) => entry.category === item.category)!;
-        const knowledge: Knowledge = {
-          id: randomUUID(),
+        const { skill } = candidate(workspace, res, item, {
           title: `${decision === 'accepted' ? 'Accepted' : 'Rejected'}: ${suggestion.title}`,
-          content: `${decision === 'accepted' ? 'Accepted advice' : 'Rejected suggestion — do not treat this as an approved requirement'}: ${suggestion.title}\nOriginal observation: ${suggestion.detail}\nOriginal proposed action: ${suggestion.action}\nReviewer rationale: ${comment || 'Accepted by senior reviewer without additional comment.'}\nCase context: ${item.title}; ${item.category}; ${item.documentType}. Internal precedent only; verify applicability to each new shipment.`,
-          category: item.category,
-          jurisdiction: 'Singapore',
-          skillId: skill.id,
-          sourceType: 'Decision',
-          sourceName: `${user(res).name} · ${item.reference}`,
-          status: 'Approved',
-          createdAt: now().toISOString(),
-          author: user(res).name,
-          tags: [decision, item.category, 'Senior review'],
+          lead: `${decision === 'accepted' ? 'Accepted advice' : 'Rejected suggestion — do not treat this as an approved requirement'}: ${suggestion.title}`,
+          body: `Original observation: ${suggestion.detail}\nOriginal proposed action: ${suggestion.action}`,
+          comment,
           decision,
-          caseId: item.id,
-        };
-        workspace.knowledge.unshift(knowledge);
-        knowledgeSync?.enqueue(workspace);
-        skill.status = 'Active';
-        skill.updatedAt = now().toISOString();
+          rule,
+          skillId: review.skillIds.find((id) =>
+            suggestion.citations.some(
+              (ref) => workspace.knowledge.find((entry) => entry.id === ref.id)?.skillId === id,
+            ),
+          ),
+        });
         activity(
           workspace,
           res,
           'decision',
-          `Suggestion ${decision} · knowledge captured`,
-          `${suggestion.title}${comment ? ` — ${comment}` : ''}`,
+          `Suggestion ${decision} · candidate knowledge recorded`,
+          `${suggestion.title}${comment ? ` — ${comment}` : ''} Awaiting approval by ${awaiting(workspace, skill, res)} before agents use it.`,
           item.id,
         );
         return item;
       }),
     );
+  });
+  app.post('/api/cases/:id/findings', (req, res) => {
+    manager(res);
+    const title = string(req.body?.title, 'What the advisor missed', 200, true);
+    const action = string(req.body?.action, 'What should be checked', 1500, true);
+    const comment = string(req.body?.comment, 'Why it matters', 4000, true);
+    const detail = string(req.body?.detail, 'Detail', 2000);
+    const severity = ['info', 'warning', 'critical'].includes(req.body?.severity)
+      ? (req.body.severity as Suggestion['severity'])
+      : 'warning';
+    const rule = ruleInput(req.body?.rule);
+    res.status(201).json(
+      store.mutate((workspace) => {
+        const item = record(workspace, req.params.id);
+        if (item.status !== 'In review' || !item.review)
+          fail(409, 'Findings can be added only while the case is in senior review.');
+        const suggestion: Suggestion = {
+          id: randomUUID(),
+          severity,
+          title,
+          detail: detail || comment,
+          action,
+          citations: [],
+          decision: 'accepted',
+          comment,
+          decidedBy: user(res).name,
+          origin: 'manager',
+          ...(rule ? { rule } : {}),
+        };
+        item.review!.suggestions.push(suggestion);
+        updated(item);
+        const { skill } = candidate(workspace, res, item, {
+          title: `Missed by advisor: ${title}`,
+          lead: `Finding the advisor did not raise: ${title}`,
+          body: `What to check: ${action}${detail ? `\nDetail: ${detail}` : ''}`,
+          comment,
+          decision: 'accepted',
+          missed: true,
+          rule,
+        });
+        activity(
+          workspace,
+          res,
+          'decision',
+          'Reviewer added a finding the advisor missed',
+          `${title} — ${comment} Awaiting approval by ${awaiting(workspace, skill, res)} before agents use it.`,
+          item.id,
+        );
+        return item;
+      }),
+    );
+  });
+  app.post('/api/cases/:id/draft-rule', async (req, res) => {
+    manager(res);
+    const decision = ['accepted', 'rejected', 'missed'].includes(req.body?.decision)
+      ? (req.body.decision as 'accepted' | 'rejected' | 'missed')
+      : fail(400, 'Choose accepted, rejected or missed.');
+    const note = string(req.body?.note, 'Reviewer note', 4000, true);
+    const snapshot = store.read();
+    const item = record(snapshot, req.params.id);
+    if (item.status !== 'In review' || !item.review)
+      fail(409, 'Rules can be drafted only while the case is in senior review.');
+    const finding = req.body?.suggestionId
+      ? (item.review!.suggestions.find((entry) => entry.id === req.body.suggestionId) ??
+        fail(404, 'Suggestion not found.'))
+      : undefined;
+    const started = Date.now();
+    const draft = await draftRule(snapshot, item, finding, note, decision, ai, {
+      visitorId: createHash('sha256').update(user(res).id).digest('hex'),
+      conversationId: randomUUID(),
+    });
+    if (provider !== 'local' && liveConfigured(ai))
+      noteConnection(draft.mode, draft.fallbackReason, Date.now() - started);
+    res.json(draft);
   });
   app.post('/api/cases/:id/decision', (req, res) => {
     manager(res);
@@ -660,6 +927,8 @@ export function createApp(options: AppOptions = {}) {
       status: 'Pending',
       createdAt: now().toISOString(),
       author: user(res).name,
+      authorId: user(res).id,
+      version: 1,
       tags: ['Imported document', skill.category],
     };
     if (req.file && originals) {
@@ -680,30 +949,248 @@ export function createApp(options: AppOptions = {}) {
         res,
         'import',
         'Document imported for review',
-        `${title} was mapped to ${skill.name}. Manager publication is required before retrieval.`,
+        `${title} was mapped to ${skill.name}. A second person (the pill owner or approver) must approve it before retrieval.`,
       );
     });
     res.status(201).json(knowledge);
   });
+  /** Every change to a pill's approved knowledge or definition is a numbered release. */
+  const release = (
+    workspace: Workspace,
+    skill: Skill,
+    res: Response,
+    change: string,
+    approvedBy?: string,
+  ) => {
+    const result = recordRelease(workspace, skill, now(), user(res).name, change, approvedBy);
+    knowledgeSync?.enqueue(workspace);
+    return result;
+  };
   app.post('/api/knowledge/:id/publish', (req, res) => {
     manager(res);
     res.json(
       store.mutate((workspace) => {
-        const item =
-          workspace.knowledge.find((entry) => entry.id === req.params.id) ??
-          fail(404, 'Knowledge entry not found.');
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        governor(workspace, skill, res);
         if (item.status === 'Approved') fail(409, 'This knowledge entry is already approved.');
+        if (item.status === 'Retired')
+          fail(
+            409,
+            'Declined or retired knowledge cannot be approved. Restore it or record it again.',
+          );
+        if (isAuthor(item, res))
+          fail(403, 'A second person must approve what you recorded or imported.');
         item.status = 'Approved';
-        knowledgeSync?.enqueue(workspace);
-        const skill = workspace.skills.find((entry) => entry.id === item.skillId)!;
-        skill.status = 'Active';
-        skill.updatedAt = now().toISOString();
+        item.version ??= 1;
+        item.approvedBy = user(res).name;
+        item.approvedAt = now().toISOString();
+        const released = release(workspace, skill, res, `Approved: ${item.title}`, user(res).name);
         activity(
           workspace,
           res,
           'approval',
           'Knowledge published',
-          `${item.title} is now available to the ${skill.name} skill.`,
+          `${item.title} is now available to the ${skill.name} pill (release v${released.version}).`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.post('/api/knowledge/:id/decline', (req, res) => {
+    const reason = string(req.body?.reason, 'Reason', 1000, true);
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        if (!isAuthor(item, res)) {
+          manager(res);
+          governor(workspace, skill, res);
+        }
+        if (item.status !== 'Pending')
+          fail(409, 'Only knowledge awaiting approval can be declined.');
+        item.status = 'Retired';
+        item.retiredBy = user(res).name;
+        item.retiredAt = now().toISOString();
+        item.retiredReason = reason;
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Candidate knowledge declined',
+          `${item.title} — ${reason}`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.put('/api/knowledge/:id', (req, res) => {
+    const title = string(req.body?.title, 'Title', 200, true);
+    const content = string(req.body?.content, 'Content', 120_000, true);
+    const note = string(req.body?.note, 'Reason for the change', 1000);
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        if (item.status === 'Retired')
+          fail(409, 'Retired knowledge cannot be edited. Restore it first.');
+        if (item.status === 'Pending') {
+          if (!isAuthor(item, res)) {
+            manager(res);
+            governor(workspace, skill, res);
+          }
+          item.title = title;
+          item.content = content;
+          activity(
+            workspace,
+            res,
+            'import',
+            'Candidate knowledge edited',
+            `${title} was reworded before approval.`,
+          );
+          return item;
+        }
+        manager(res);
+        governor(workspace, skill, res);
+        if (title === item.title && content === item.content) fail(400, 'No changes to propose.');
+        if (!note) fail(400, 'Explain why this changes approved knowledge.');
+        item.revision = {
+          title,
+          content,
+          note,
+          proposedBy: user(res).name,
+          proposedById: user(res).id,
+          proposedAt: now().toISOString(),
+        };
+        activity(
+          workspace,
+          res,
+          'import',
+          'Revision proposed',
+          `${item.title} (v${item.version ?? 1}) — ${note} The current version stays live until a second person approves.`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.post('/api/knowledge/:id/revision/approve', (req, res) => {
+    manager(res);
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        governor(workspace, skill, res);
+        const revision = item.revision ?? fail(409, 'There is no proposed revision to approve.');
+        if (revision.proposedById === user(res).id)
+          fail(403, 'A second person must approve a revision you proposed.');
+        item.history = [
+          {
+            version: item.version ?? 1,
+            title: item.title,
+            content: item.content,
+            tags: item.tags,
+            changedBy: item.approvedBy ?? item.author,
+            changedAt: item.approvedAt ?? item.createdAt,
+            ...(item.approvedBy ? { approvedBy: item.approvedBy } : {}),
+            note: item.versionNote ?? 'Initial version',
+          },
+          ...(item.history ?? []),
+        ];
+        item.title = revision.title;
+        item.content = revision.content;
+        item.version = nextKnowledgeVersion(item);
+        item.versionNote = revision.note;
+        item.approvedBy = user(res).name;
+        item.approvedAt = now().toISOString();
+        delete item.revision;
+        const released = release(
+          workspace,
+          skill,
+          res,
+          `Revised: ${item.title} (v${item.version})`,
+          user(res).name,
+        );
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Knowledge revision approved',
+          `${item.title} is now version ${item.version} in release v${released.version}. ${revision.note}`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.delete('/api/knowledge/:id/revision', (req, res) => {
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        const revision = item.revision ?? fail(409, 'There is no proposed revision.');
+        if (revision.proposedById !== user(res).id) {
+          manager(res);
+          governor(workspace, skill, res);
+        }
+        delete item.revision;
+        activity(
+          workspace,
+          res,
+          'import',
+          'Revision discarded',
+          `${item.title} stays at version ${item.version ?? 1}.`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.post('/api/knowledge/:id/retire', (req, res) => {
+    manager(res);
+    const reason = string(req.body?.reason, 'Reason', 1000, true);
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        governor(workspace, skill, res);
+        if (item.status !== 'Approved') fail(409, 'Only approved knowledge can be retired.');
+        item.status = 'Retired';
+        item.retiredBy = user(res).name;
+        item.retiredAt = now().toISOString();
+        item.retiredReason = reason;
+        delete item.revision;
+        const released = release(workspace, skill, res, `Retired: ${item.title}`, user(res).name);
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Knowledge retired',
+          `${item.title} is no longer used (release v${released.version}). ${reason}`,
+        );
+        return item;
+      }),
+    );
+  });
+  app.post('/api/knowledge/:id/restore', (req, res) => {
+    manager(res);
+    res.json(
+      store.mutate((workspace) => {
+        const item = entryOf(workspace, req.params.id);
+        const skill = pillOf(workspace, item.skillId);
+        governor(workspace, skill, res);
+        if (item.status !== 'Retired' || !item.approvedAt)
+          fail(409, 'Only knowledge that was once approved can be restored.');
+        item.status = 'Approved';
+        item.approvedBy = user(res).name;
+        item.approvedAt = now().toISOString();
+        delete item.retiredBy;
+        delete item.retiredAt;
+        delete item.retiredReason;
+        const released = release(workspace, skill, res, `Restored: ${item.title}`, user(res).name);
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Knowledge restored',
+          `${item.title} is in use again (release v${released.version}).`,
         );
         return item;
       }),
@@ -717,23 +1204,176 @@ export function createApp(options: AppOptions = {}) {
       store.mutate((workspace) => {
         if (workspace.skills.some((skill) => skill.name.toLowerCase() === name.toLowerCase()))
           fail(409, 'A skill with this name already exists.');
-        const skill = {
+        const managers = workspace.users.filter((entry) => entry.role === 'manager');
+        const owner =
+          user(res).role === 'manager' ? user(res).id : (managers[0]?.id ?? user(res).id);
+        const approver = managers.find((entry) => entry.id !== owner)?.id ?? owner;
+        const skill: Skill = {
           id: randomUUID(),
           name,
           category: req.body.category as Category,
-          jurisdiction: 'Singapore' as const,
+          jurisdiction: 'Singapore',
           description,
           tags: [req.body.category as string],
-          status: 'Draft' as const,
+          status: 'Draft',
           updatedAt: now().toISOString(),
+          owner,
+          approver,
+          version: 0,
+          releases: [],
+          inScope: [],
+          outOfScope: [],
+          guardrails: ['Recommend only; a senior reviewer decides'],
+          escalations: [standardEscalation()],
         };
         workspace.skills.push(skill);
         activity(
           workspace,
           res,
           'skill',
-          'Agent skill created',
-          `${name} is a draft until a manager publishes its first knowledge entry.`,
+          'Intelligence pill created',
+          `${name} is a draft until ${userName(workspace, approver)} or ${userName(workspace, owner)} approves its first knowledge entry.`,
+        );
+        return skill;
+      }),
+    );
+  });
+  app.put('/api/skills/:id', (req, res) => {
+    manager(res);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    res.json(
+      store.mutate((workspace) => {
+        const skill = pillOf(workspace, req.params.id);
+        governor(workspace, skill, res);
+        const managerIds = workspace.users
+          .filter((entry) => entry.role === 'manager')
+          .map((entry) => entry.id);
+        const owner =
+          body.owner === undefined ? skill.owner : string(body.owner, 'Owner', 100, true);
+        const approver =
+          body.approver === undefined
+            ? skill.approver
+            : string(body.approver, 'Approver', 100, true);
+        if (!managerIds.includes(owner) || !managerIds.includes(approver))
+          fail(400, 'The owner and approver must be senior reviewers.');
+        if (owner === approver && managerIds.length > 1)
+          fail(400, 'The owner and approver must be different people.');
+        const next: PillDefinition = {
+          description:
+            body.description === undefined
+              ? skill.description
+              : string(body.description, 'Description', 2000, true),
+          owner,
+          approver,
+          inScope:
+            body.inScope === undefined ? skill.inScope : textList(body.inScope, 'In-scope list'),
+          outOfScope:
+            body.outOfScope === undefined ? skill.outOfScope : boundaries(body.outOfScope),
+          guardrails:
+            body.guardrails === undefined
+              ? skill.guardrails
+              : textList(body.guardrails, 'Guardrails'),
+          escalations:
+            body.escalations === undefined ? skill.escalations : escalations(body.escalations),
+        };
+        if (JSON.stringify(next) === JSON.stringify(definitionOf(skill)))
+          fail(400, 'No changes to propose.');
+        const note = string(body.note, 'Reason for the change', 1000, skill.version > 0);
+        if (skill.version === 0) {
+          // Nothing is live yet, so there is nothing to protect with a second approval.
+          Object.assign(skill, next);
+          skill.updatedAt = now().toISOString();
+          activity(workspace, res, 'skill', 'Pill definition edited', `${skill.name} (draft).`);
+          return skill;
+        }
+        skill.pending = {
+          proposedBy: user(res).name,
+          proposedById: user(res).id,
+          proposedAt: now().toISOString(),
+          note,
+          definition: next,
+        };
+        activity(
+          workspace,
+          res,
+          'skill',
+          'Pill change proposed',
+          `${skill.name} v${skill.version} — ${note} Awaiting release by ${userName(workspace, [skill.owner, skill.approver].find((id) => id !== user(res).id) ?? skill.approver)}.`,
+        );
+        return skill;
+      }),
+    );
+  });
+  app.post('/api/skills/:id/release', (req, res) => {
+    manager(res);
+    res.json(
+      store.mutate((workspace) => {
+        const skill = pillOf(workspace, req.params.id);
+        governor(workspace, skill, res);
+        const pending = skill.pending ?? fail(409, 'There is no proposed change to release.');
+        if (pending.proposedById === user(res).id)
+          fail(403, 'A different person must release a change you proposed.');
+        Object.assign(skill, definitionOf(pending.definition));
+        delete skill.pending;
+        const released = recordRelease(
+          workspace,
+          skill,
+          now(),
+          pending.proposedBy,
+          pending.note || 'Definition updated',
+          user(res).name,
+        );
+        knowledgeSync?.enqueue(workspace);
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Pill released',
+          `${skill.name} is now v${released.version}. ${pending.note}`,
+        );
+        return skill;
+      }),
+    );
+  });
+  app.delete('/api/skills/:id/pending', (req, res) => {
+    manager(res);
+    res.json(
+      store.mutate((workspace) => {
+        const skill = pillOf(workspace, req.params.id);
+        governor(workspace, skill, res);
+        if (!skill.pending) fail(409, 'There is no proposed change.');
+        delete skill.pending;
+        activity(
+          workspace,
+          res,
+          'skill',
+          'Pill change discarded',
+          `${skill.name} stays at v${skill.version}.`,
+        );
+        return skill;
+      }),
+    );
+  });
+  app.post('/api/skills/:id/rollback', (req, res) => {
+    manager(res);
+    const version = Number(req.body?.version);
+    res.json(
+      store.mutate((workspace) => {
+        const skill = pillOf(workspace, req.params.id);
+        governor(workspace, skill, res);
+        const target =
+          skill.releases.find((entry) => entry.version === version) ??
+          fail(404, 'That release does not exist.');
+        if (target.version === skill.version)
+          fail(409, 'That release is already the current version.');
+        const released = rollbackPill(workspace, skill, target, now(), user(res).name);
+        knowledgeSync?.enqueue(workspace);
+        activity(
+          workspace,
+          res,
+          'approval',
+          'Pill rolled back',
+          `${skill.name} now matches v${target.version}, released as v${released.version}.`,
         );
         return skill;
       }),
@@ -765,7 +1405,7 @@ export function createApp(options: AppOptions = {}) {
       activeConversations.delete(scope);
     }
     if (liveConfigured(ai) && (answer.mode === 'live' || provider === 'adp'))
-      noteConnection(answer.mode);
+      noteConnection(answer.mode, answer.fallbackReason);
     const messages: ChatMessage[] = [
       {
         id: randomUUID(),
@@ -787,6 +1427,19 @@ export function createApp(options: AppOptions = {}) {
   app.post('/api/integrations/check', async (_req, res) => {
     manager(res);
     if (!liveConfigured(ai)) fail(409, 'Configure an AI provider on the server first.');
+    // First ask whether this host can reach the provider at all. It costs no allowance, and it
+    // tells a broken network path apart from a rejected key or an unusable answer.
+    const target = aiEndpoint();
+    const network = target ? await probeEndpoint(target).catch(() => undefined) : undefined;
+    if (network && !network.ok) {
+      noteConnection('local', network.reason);
+      res.status(502).json({
+        ...connection,
+        error: `The provider could not be reached. Reason: ${network.reason}`,
+      });
+      return;
+    }
+    const started = Date.now();
     const answer = await answerQuestion(
       store.read(),
       'What should I check about permit validity before a Singapore shipment? Cite an approved source.',
@@ -799,14 +1452,13 @@ export function createApp(options: AppOptions = {}) {
         documentMap: knowledgeSync?.documentMap(),
       },
     );
-    noteConnection(answer.mode);
+    noteConnection(answer.mode, answer.fallbackReason, Date.now() - started);
     res.status(answer.mode === 'live' ? 200 : 502).json({
       ...connection,
       ...(answer.mode === 'live'
         ? {}
         : {
-            error:
-              'The provider did not return a usable, grounded answer. Check its published application and credentials.',
+            error: `The provider did not return a usable, grounded answer.${answer.fallbackReason ? ` Reason: ${answer.fallbackReason}` : ''} Check its published application and credentials.`,
           }),
     });
   });
@@ -870,6 +1522,8 @@ export function createApp(options: AppOptions = {}) {
     app,
     store,
     knowledgeSync,
+    provider,
+    aiEndpoint,
     close: () => {
       knowledgeSync?.stop();
       store.close();
